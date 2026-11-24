@@ -2497,3 +2497,45 @@ test('the progress and step tools are heard under the server CPixelCrew, and the
   // The old name belongs to no tool of this plugin now: it goes through as any other tool.
   expect(await $.tool.call({ ...PLAN, tool: 'mcp__pixel-crew__progress' } as never)).not.toMatchObject({ result: 'ok: Tasks 0/2' })
 })
+
+// Which agents move a reported plan from "plan" to "delegate" when they start. Seen in the stored
+// plan: the phase is not drawn as a word, so the one place it can be read is the plugin's `flow`
+// state, which the Agent tool hook writes (a `state.set` listener keeps the latest value). A planned
+// task counts whatever its type; an unplanned one only when it is a legacy `pixel-crew:` type.
+async function phaseAfterAgent($: Engine, on: On, subagentType: string, description: string): Promise<unknown> {
+  let flow: { phase?: string } | undefined
+  on('state.set', ((_$: unknown, e: { key: string; value: unknown }, next: (x: unknown) => unknown) => {
+    if (e.key === 'flow') flow = e.value as { phase?: string }
+    return next(e)
+  }) as never)
+  await boot($, on)
+  await $.tool.call({ tool: PROGRESS, title: 'Tidy the archive', phase: 'plan', tasks: [{ title: 'Index the archive' }, { title: 'Prune old logs' }] } as never)
+  expect(flow?.phase).toBe('plan')
+  await startTurn($)
+  await $.tool.call({ tool: 'Agent', subagent_type: subagentType, description, prompt: 'Do it.' } as never)
+  return flow?.phase
+}
+
+test('a planned task moves the phase to delegate when its agent starts, for a built-in type', async ($, on) => {
+  expect(await phaseAfterAgent($, on, 'Explore', 'Index the archive')).toBe('delegate')
+})
+
+test('a planned task moves the phase to delegate when its agent starts, for a neutral routed type', async ($, on) => {
+  expect(await phaseAfterAgent($, on, 'some-router:worker', 'Prune old logs')).toBe('delegate')
+})
+
+test('a planned task moves the phase to delegate when its agent starts, for a general type', async ($, on) => {
+  expect(await phaseAfterAgent($, on, 'general-purpose', 'Index the archive')).toBe('delegate')
+})
+
+test('an agent matching no planned task leaves the phase at plan, for a built-in type', async ($, on) => {
+  expect(await phaseAfterAgent($, on, 'Explore', 'Read the manual')).toBe('plan')
+})
+
+test('an agent matching no planned task leaves the phase at plan, for a neutral routed type', async ($, on) => {
+  expect(await phaseAfterAgent($, on, 'some-router:worker', 'Read the manual')).toBe('plan')
+})
+
+test('a legacy pixel-crew: agent moves the phase to delegate even when it matches no planned task', async ($, on) => {
+  expect(await phaseAfterAgent($, on, 'pixel-crew:engineer', 'Read the manual')).toBe('delegate')
+})
