@@ -9,8 +9,8 @@ import type { On } from 'claude-code'
 import { MAX_DRAWN_ROWS, blankMain, blankRetired, blankUsage, capRows, closeLog, drawnRows, flowSettled, kindName, limitGauges, mergeFlow, mergeLimits, moreLine, normalizeAgent, planKey, plannedOf, priceOf, reopenedFlow, retire, totals, usageSplit } from '../hooks/model'
 import type { AgentRun, Flow } from '../types'
 
-const PLUGIN = 'pixel-crew'
-const PROGRESS = 'mcp__pixel-crew__progress'
+const PLUGIN = 'CPixelCrew'
+const PROGRESS = 'mcp__CPixelCrew__progress'
 const T0 = Date.parse('2026-11-13T10:00:00Z')
 
 const PANE_PROPS = { title: 'Agents', isFocused: false, bodyColumns: 41, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} }

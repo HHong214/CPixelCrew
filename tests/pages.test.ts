@@ -107,7 +107,7 @@ describe('anchoredPage', () => {
 // ---------------------------------------------------------------------------
 // The panel: a harness of its own, as register.test.ts has (the engine answered by hooks).
 
-const PLUGIN = 'pixel-crew'
+const PLUGIN = 'CPixelCrew'
 const T0 = Date.parse('2026-11-13T10:00:00Z')
 const PANE_PROPS = { title: 'Agents', isFocused: false, bodyColumns: 41, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} }
 const PANE_DRAWING_LIMIT = 150_000

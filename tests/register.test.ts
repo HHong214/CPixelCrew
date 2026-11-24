@@ -15,9 +15,9 @@ import type { On } from 'claude-code'
 
 import { OTHER_HUES, closeForgetsPane, reopensPane, shiftColor, withPaneOpen, withoutPaneOpen } from '../hooks/model'
 
-const PLUGIN = 'pixel-crew'
-const PROGRESS = 'mcp__pixel-crew__progress'
-const STEP = 'mcp__pixel-crew__step'
+const PLUGIN = 'CPixelCrew'
+const PROGRESS = 'mcp__CPixelCrew__progress'
+const STEP = 'mcp__CPixelCrew__step'
 const T0 = Date.parse('2026-11-13T10:00:00Z')
 const SURFACES = ['desktop', 'terminal'] as const
 type Surface = (typeof SURFACES)[number]
@@ -58,7 +58,7 @@ const APP_USAGE = {
 const appText = (json: unknown = APP_USAGE) => ({ content: [{ type: 'text', text: JSON.stringify(json) }], isError: false })
 
 // The option texts the mod writes for the plugin screen to show; the rest are settings.
-const MIRRORS = ['rateNow', 'textSizeNow', 'iconSizeNow', 'barSizeNow', 'logLinesNow'].map(k => `pixel-crew.${k}`)
+const MIRRORS = ['rateNow', 'textSizeNow', 'iconSizeNow', 'barSizeNow', 'logLinesNow'].map(k => `CPixelCrew.${k}`)
 const isMirror = (c: { key: string }): boolean => MIRRORS.includes(c.key)
 
 // One model request's usage: Opus 5.5 prices it at $0.30.
@@ -610,11 +610,11 @@ for (const surface of SURFACES) {
     for (const h of headings) expect(h.props).toMatchObject({ weight: 'semibold' })
     const text = await words(sp)
     expect(text).toContain('Sizes are set here. Each press saves at once.')
-    expect(text).toContain('The order of the items on the bar. Switch items on or off under Customize > Plugins > pixel-crew.')
+    expect(text).toContain('The order of the items on the bar. Switch items on or off under Customize > Plugins > CPixelCrew.')
     for (const shown of ['Panel text', 'Mascots', 'Bar', 'Log lines', '100%', '200%', '50']) expect(text).toContain(shown)
     // The dim closing line stays last.
     const texts = (await sp.findAll({ type: 'Text' })).map(t => t.text)
-    expect(texts.at(-1)).toBe('Everything else is under Customize > Plugins > pixel-crew.')
+    expect(texts.at(-1)).toBe('Everything else is under Customize > Plugins > CPixelCrew.')
     // Eight stepper buttons, then ▲ and ▼ per bar item, and nothing else: no Select, no Input, no checkbox, no reset.
     const keys = (await sp.findAll({ type: 'Button' })).map(b => b.key)
     expect(keys).toEqual([...['textSize', 'iconSize', 'barSize', 'logLines'].flatMap(k => [`size-${k}-down`, `size-${k}-up`]), ...ORDER.flatMap(k => [`up-${k}`, `down-${k}`])])
@@ -628,14 +628,14 @@ for (const surface of SURFACES) {
     await clock.settle()
     // The store gets the sizes; the plugin screen one mirror; no setting option is written.
     expect(writes.filter(w => w.key === 'sizes').at(-1)?.value).toEqual({ textSize: 110, iconSize: 200, barSize: 100, logLines: 50 })
-    expect(configs.slice(before)).toEqual([{ key: 'pixel-crew.textSizeNow', value: '110%' }])
+    expect(configs.slice(before)).toEqual([{ key: 'CPixelCrew.textSizeNow', value: '110%' }])
     expect(await words(sp)).toContain('110%')
     // The log lines step by 5, the others by 10, each press from the sizes at the press.
     await sp.press({ key: 'size-logLines-down' })
     await sp.press({ key: 'size-iconSize-up' })
     await clock.settle()
     expect(writes.filter(w => w.key === 'sizes').at(-1)?.value).toEqual({ textSize: 110, iconSize: 210, barSize: 100, logLines: 45 })
-    expect(configs.slice(before).map(c => c.key)).toEqual(['pixel-crew.textSizeNow', 'pixel-crew.logLinesNow', 'pixel-crew.iconSizeNow'])
+    expect(configs.slice(before).map(c => c.key)).toEqual(['CPixelCrew.textSizeNow', 'CPixelCrew.logLinesNow', 'CPixelCrew.iconSizeNow'])
     expect(configs.every(isMirror)).toBe(true)
     await sp.unmount()
   })
@@ -730,11 +730,11 @@ test('/crew set barItems writes the eight item options, in their fixed order', a
   expect(await $.command.run({ command: 'crew', args: 'set barItems time, turn, context' } as never)).toMatchObject({ text: 'Set barItems to context, turn, time.' })
   // From the defaults (all eight): only what differs, as booleans.
   expect(configs).toEqual([
-    { key: 'pixel-crew.barFiveHour', value: false },
-    { key: 'pixel-crew.barWeek', value: false },
-    { key: 'pixel-crew.barModelWeek', value: false },
-    { key: 'pixel-crew.barSpeed', value: false },
-    { key: 'pixel-crew.barCache', value: false },
+    { key: 'CPixelCrew.barFiveHour', value: false },
+    { key: 'CPixelCrew.barWeek', value: false },
+    { key: 'CPixelCrew.barModelWeek', value: false },
+    { key: 'CPixelCrew.barSpeed', value: false },
+    { key: 'CPixelCrew.barCache', value: false },
   ])
 })
 
@@ -1090,19 +1090,19 @@ test('/crew set writes an option through the settings, as its own kind, and a si
   const { configs, writes } = await boot($, on)
   const run = (args: string) => $.command.run({ command: 'crew', args } as never)
   expect(await run('set theme clawd')).toMatchObject({ text: 'Set theme to clawd.' })
-  expect(configs.at(-1)).toEqual({ key: 'pixel-crew.theme', value: 'clawd' })
+  expect(configs.at(-1)).toEqual({ key: 'CPixelCrew.theme', value: 'clawd' })
   expect(await run('set BARTURN off')).toMatchObject({ text: 'Set barTurn to false.' })
-  expect(configs.at(-1)).toEqual({ key: 'pixel-crew.barTurn', value: false })
+  expect(configs.at(-1)).toEqual({ key: 'CPixelCrew.barTurn', value: false })
   // 1.6's names for two values are read as the new ones.
   expect(await run('set barColors role')).toMatchObject({ text: 'Set barColors to kind.' })
   expect(await run('set autoOpen crew')).toMatchObject({ text: 'Set autoOpen to plan.' })
-  expect(configs.at(-1)).toEqual({ key: 'pixel-crew.autoOpen', value: 'plan' })
+  expect(configs.at(-1)).toEqual({ key: 'CPixelCrew.autoOpen', value: 'plan' })
 
   // A size: the store and its mirror, no size option.
   expect(await run('set textSize 120%')).toMatchObject({ text: 'Set textSize to 120.' })
   expect(writes.filter(w => w.key === 'sizes').at(-1)?.value).toEqual({ textSize: 120, iconSize: 200, barSize: 100, logLines: 50 })
-  expect(configs.filter(c => c.key === 'pixel-crew.textSizeNow').at(-1)).toEqual({ key: 'pixel-crew.textSizeNow', value: '120%' })
-  expect(configs.some(c => c.key === 'pixel-crew.textSize')).toBe(false)
+  expect(configs.filter(c => c.key === 'CPixelCrew.textSizeNow').at(-1)).toEqual({ key: 'CPixelCrew.textSizeNow', value: '120%' })
+  expect(configs.some(c => c.key === 'CPixelCrew.textSize')).toBe(false)
   expect(await run('set logLines 30')).toMatchObject({ text: 'Set logLines to 30.' })
   expect(writes.filter(w => w.key === 'sizes').at(-1)?.value).toEqual({ textSize: 120, iconSize: 200, barSize: 100, logLines: 30 })
 
@@ -1129,7 +1129,7 @@ test('/crew set writes an option through the settings, as its own kind, and a si
 const OLD_SIZES = { textSize: 150, iconSize: 90, barSize: 120, logLines: 10 }
 const OLD_ORDER = ['time', 'turn', 'context', 'fiveHour', 'week', 'model_week', 'speed', 'cache']
 const DEFAULT_SIZES = { textSize: 100, iconSize: 200, barSize: 100, logLines: 50 }
-const isReset = (c: { key: string }): boolean => c.key === 'pixel-crew.resetAll'
+const isReset = (c: { key: string }): boolean => c.key === 'CPixelCrew.resetAll'
 
 test('/crew reset stores the flag, puts the sizes and the bar order back at once, and writes the first differing option', { options: { theme: 'clawd', palette: 'sunset' } }, async ($, on) => {
   const { configs, clock, stored } = await boot($, on, { stored: { sizes: { ...OLD_SIZES }, barOrder: [...OLD_ORDER] } })
@@ -1144,7 +1144,7 @@ test('/crew reset stores the flag, puts the sizes and the bar order back at once
   // One option in this load, the first in the options' order; no mirror before the end.
   await clock.advance(1_000)
   await clock.settle()
-  expect(configs.slice(before)).toEqual([{ key: 'pixel-crew.theme', value: 'cat' }])
+  expect(configs.slice(before)).toEqual([{ key: 'CPixelCrew.theme', value: 'cat' }])
   expect(configs.some(isReset)).toBe(false)
   // What is drawn follows at once: the default sizes and order.
   const sp = await settingsPane($, 'desktop')
@@ -1158,7 +1158,7 @@ test('a load with the reset flag writes the first option not at its default, and
   const { configs, clock, stored } = await boot($, on, { stored: { resetting: true } })
   const bar = await band($, 'terminal')
   await clock.settle()
-  expect(configs).toEqual([{ key: 'pixel-crew.theme', value: 'cat' }])
+  expect(configs).toEqual([{ key: 'CPixelCrew.theme', value: 'cat' }])
   // Not done yet: the flag stays and no mirror is written.
   expect(stored.resetting).toBe(true)
   // A tick or another drawing in the same load does not run it again.
@@ -1174,7 +1174,7 @@ test('the next load writes the next differing option', { options: { barTime: fal
   const { configs, clock, stored } = await boot($, on, { stored: { resetting: true } })
   const bar = await band($, 'terminal')
   await clock.settle()
-  expect(configs).toEqual([{ key: 'pixel-crew.palette', value: 'ocean' }])
+  expect(configs).toEqual([{ key: 'CPixelCrew.palette', value: 'ocean' }])
   expect(stored.resetting).toBe(true)
   await bar.unmount()
 })
@@ -1197,7 +1197,7 @@ test('a reset the settings refuse stops, clears the flag and says so', { options
   const { configs, clock, toasts, stored } = await boot($, on, { deny: 'locked by policy', stored: { resetting: true } })
   const bar = await band($, 'desktop')
   await clock.settle()
-  expect(configs[0]).toEqual({ key: 'pixel-crew.theme', value: 'cat' })
+  expect(configs[0]).toEqual({ key: 'CPixelCrew.theme', value: 'cat' })
   expect(toasts.at(-1)).toBe('Could not reset theme: locked by policy')
   expect(stored.resetting).toBe(false)
   // No option beyond the refused one is tried.
@@ -1211,9 +1211,9 @@ test('the mirror sync writes only the mirrors that differ', { options: { textSiz
   expect(configs).toHaveLength(0)
   const bar = await band($, 'terminal')
   await clock.settle()
-  expect(configs.map(c => c.key).sort()).toEqual(['pixel-crew.logLinesNow', 'pixel-crew.rateNow'])
-  expect(configs.find(c => c.key === 'pixel-crew.logLinesNow')?.value).toBe('50')
-  expect(String(configs.find(c => c.key === 'pixel-crew.rateNow')?.value)).toMatch(/^1 USD = [\d.]+ GBP/)
+  expect(configs.map(c => c.key).sort()).toEqual(['CPixelCrew.logLinesNow', 'CPixelCrew.rateNow'])
+  expect(configs.find(c => c.key === 'CPixelCrew.logLinesNow')?.value).toBe('50')
+  expect(String(configs.find(c => c.key === 'CPixelCrew.rateNow')?.value)).toMatch(/^1 USD = [\d.]+ GBP/)
   // Once per load: more drawings and ticks write nothing more.
   await clock.advance(2_000)
   const p = await pane($, 'desktop')
@@ -1244,8 +1244,8 @@ test('/crew set says so when the settings refuse the change', { options: { theme
   const before = configs.length
   // The reset's first write is refused: it says which, and the flag does not stay set.
   expect(await $.command.run({ command: 'crew', args: 'reset' } as never)).toEqual({ text: 'Could not reset theme: locked by policy' })
-  expect(configs.slice(before)[0]).toEqual({ key: 'pixel-crew.theme', value: 'cat' })
-  expect(configs.filter(c => !isMirror(c)).slice(1)).toEqual([{ key: 'pixel-crew.theme', value: 'cat' }])
+  expect(configs.slice(before)[0]).toEqual({ key: 'CPixelCrew.theme', value: 'cat' })
+  expect(configs.filter(c => !isMirror(c)).slice(1)).toEqual([{ key: 'CPixelCrew.theme', value: 'cat' }])
   expect(configs.some(isReset)).toBe(false)
   expect(stored.resetting).toBe(false)
 })
@@ -1392,7 +1392,7 @@ test('every /crew form answers', async ($, on) => {
   expect(opened).toEqual(['crew-agents', 'crew-agents', 'crew-settings', 'crew-guide'])
   expect(await run('bar')).toMatchObject({ text: 'Bar collapsed.' })
   expect(await run('set barItems context,5h')).toMatchObject({ text: 'Set barItems to context, 5h.' })
-  expect(configs.at(-1)?.key).toBe('pixel-crew.barTime')
+  expect(configs.at(-1)?.key).toBe('CPixelCrew.barTime')
   const usage = await run('what')
   for (const form of ['/crew open', '/crew bar', '/crew guide', '/crew settings', '/crew set', '/crew reset']) expect(usage).toMatchObject({ text: expect.stringContaining(form) })
   // The log pane is gone, and with it `/crew log`.
@@ -2450,4 +2450,30 @@ test('desktop: a few finished agents are all drawn, with no +N more line', async
   for (let i = 1; i <= 3; i += 1) expect(text).toContain(`Task number ${i}`)
   expect(text).not.toMatch(/\+\d+ more/)
   await p.unmount()
+})
+
+// The rename to CPixelCrew: what the engine sees of the plugin's name.
+test('every $.state read and write is under the plugin CPixelCrew', async ($, on) => {
+  const plugins = new Set<string>()
+  const keys = new Set<string>()
+  for (const event of ['state.get', 'state.set'] as const) {
+    on(event, ((_$: unknown, e: { plugin: string; key: string }, next: (x: unknown) => unknown) => {
+      plugins.add(e.plugin)
+      keys.add(e.key)
+      return next(e)
+    }) as never)
+  }
+  await boot($, on)
+  await $.tool.call(PLAN as never)
+  expect([...plugins]).toEqual(['CPixelCrew'])
+  expect(keys.size).toBeGreaterThan(5)
+})
+
+test('the progress and step tools are heard under the server CPixelCrew, and the old server name is not', async ($, on) => {
+  await boot($, on)
+  expect(PROGRESS).toBe('mcp__CPixelCrew__progress')
+  expect(STEP).toBe('mcp__CPixelCrew__step')
+  expect(await $.tool.call(PLAN as never)).toMatchObject({ result: 'ok: Tasks 0/2' })
+  // The old name belongs to no tool of this plugin now: it goes through as any other tool.
+  expect(await $.tool.call({ ...PLAN, tool: 'mcp__pixel-crew__progress' } as never)).not.toMatchObject({ result: 'ok: Tasks 0/2' })
 })

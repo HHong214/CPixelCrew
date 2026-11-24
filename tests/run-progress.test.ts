@@ -13,9 +13,9 @@ import { progressDrawing } from '../hooks/draw'
 import { DEFAULT_SETTINGS } from '../hooks/model'
 import { SPRITE_ROLES, sprite } from '../hooks/sprites'
 
-const PLUGIN = 'pixel-crew'
-const PROGRESS = 'mcp__pixel-crew__progress'
-const STEP = 'mcp__pixel-crew__step'
+const PLUGIN = 'CPixelCrew'
+const PROGRESS = 'mcp__CPixelCrew__progress'
+const STEP = 'mcp__CPixelCrew__step'
 const T0 = Date.parse('2026-11-13T10:00:00Z')
 const SURFACES = ['desktop', 'terminal'] as const
 type Surface = (typeof SURFACES)[number]

@@ -27,6 +27,7 @@ import {
   PALETTES,
   PALETTE_NAMES,
   PANEL_USAGES,
+  PLUGIN,
   SETTING_OPTION_KEYS,
   SIZE_KEYS,
   SIZE_RANGE,
@@ -2238,7 +2239,7 @@ describe('activityOf', () => {
     ['ToolSearch', { query: 'select:Read' }, 'Looking up tools: select:Read'],
     ['ToolSearch', {}, 'Looking up tools'],
     ['mcp__github__create_issue', {}, 'Using github: create_issue'],
-    ['mcp__pixel-crew__progress', {}, 'Using pixel-crew: progress'],
+    ['mcp__CPixelCrew__progress', {}, 'Using CPixelCrew: progress'],
     ['mcp__srv__a__b', {}, 'Using srv: a__b'],
     ['mcp__', {}, 'Using a tool'],
     ['FancyTool', { x: 1 }, 'Using FancyTool'],
@@ -2417,4 +2418,10 @@ test('settings survive a JSON round trip unchanged', async () => {
     barTooltips: false,
   }
   expect(normalizeSettings(JSON.parse(JSON.stringify(s)))).toEqual(s)
+})
+
+describe('the plugin name', () => {
+  test('is CPixelCrew', () => {
+    expect(PLUGIN).toBe('CPixelCrew')
+  })
 })

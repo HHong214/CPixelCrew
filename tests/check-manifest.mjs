@@ -1,6 +1,9 @@
 // Checks that plugin.json's `userConfig` declares exactly the options hooks/model.ts
 // reads: the same keys in the same order, the same kinds, defaults, pickers and ranges.
-// A test cannot read plugin.json, so this runs on its own:
+// It also holds the plugin's name to CPixelCrew (by HHong214) in the manifests, in the
+// marketplace, and in every identifier the engine sees that hooks/ and types/ spell out:
+// the tool server name, the prefix of the option keys, the `$.state` plugin key, the name
+// the settings texts show. A test cannot read plugin.json, so this runs on its own:
 //
 //   node tests/check-manifest.mjs        (from the plugin folder; exits 1 on any mismatch)
 //
@@ -219,10 +222,65 @@ try {
   process.exit(1)
 }
 
-const errors = check(manifest, model)
+// The name the mod has been renamed to, and everything that must carry it.
+const NAME = 'CPixelCrew'
+const AUTHOR = 'HHong214'
+const MARKETPLACE = 'cpixelcrew'
+
+function checkIdentity(manifest, model) {
+  const errors = []
+  const fail = message => errors.push(`identity: ${message}`)
+  const read = path => readFileSync(join(root, path), 'utf8')
+  const same = (what, got, want) => {
+    if (got !== want) fail(`${what} is ${show(got)}, want ${show(want)}`)
+  }
+
+  same('plugin.json name', manifest.name, NAME)
+  same('plugin.json author.name', manifest.author?.name, AUTHOR)
+  let market
+  try {
+    market = JSON.parse(read('.claude-plugin/marketplace.json'))
+  } catch (e) {
+    fail(`cannot read marketplace.json: ${e.message}`)
+  }
+  if (market) {
+    same('marketplace.json name', market.name, MARKETPLACE)
+    same('marketplace.json owner.name', market.owner?.name, AUTHOR)
+    same('marketplace.json plugin count', market.plugins?.length, 1)
+    same('marketplace.json plugin name', market.plugins?.[0]?.name, NAME)
+    same('marketplace.json plugin source', market.plugins?.[0]?.source, './')
+  }
+  same('model.ts PLUGIN', model.PLUGIN, NAME)
+
+  // What hooks/ and types/ spell out. Each old form must be gone; each new one must be there.
+  const files = ['hooks/register.tsx', 'hooks/model.ts', 'hooks/draw.ts', 'types/index.d.ts']
+  const text = Object.fromEntries(files.map(f => [f, read(f)]))
+  const old = [
+    [/mcp__pixel-crew__/, 'the tool server name pixel-crew (mcp__pixel-crew__...)'],
+    [/pixel-crew.[a-zA-Z$]/, 'the option key prefix pixel-crew.'],
+    [/plugin: 'pixel-crew'/, "the state plugin key 'pixel-crew'"],
+    [/'pixel-crew': {/, "the PluginState key 'pixel-crew'"],
+    [/Plugins > pixel-crew/, 'the plugin name in the settings texts (Plugins > pixel-crew)'],
+    [/crew-local/, 'the marketplace name crew-local'],
+  ]
+  for (const f of files) for (const [re, what] of old) if (re.test(text[f])) fail(`${f} still has ${what}`)
+  const want = [
+    ['hooks/register.tsx', "'mcp__CPixelCrew__progress'"],
+    ['hooks/register.tsx', "'mcp__CPixelCrew__step'"],
+    ['hooks/register.tsx', "'CPixelCrew.'"],
+    ['hooks/register.tsx', "{ plugin: 'CPixelCrew', key: 'flow' }"],
+    ['hooks/register.tsx', 'Plugins > CPixelCrew'],
+    ['hooks/model.ts', "PLUGIN = 'CPixelCrew'"],
+    ['types/index.d.ts', "'CPixelCrew': {"],
+  ]
+  for (const [f, what] of want) if (!text[f].includes(what)) fail(`${f} does not have ${what}`)
+  return errors
+}
+
+const errors = [...check(manifest, model), ...checkIdentity(manifest, model)]
 if (errors.length) {
-  console.error(`check-manifest: plugin.json disagrees with hooks/model.ts (${errors.length}):`)
+  console.error(`check-manifest: the manifest, the marketplace or the code disagrees with hooks/model.ts or the CPixelCrew name (${errors.length}):`)
   for (const e of errors) console.error(`  ${e}`)
   process.exit(1)
 }
-console.log(`check-manifest: ok, ${Object.keys(manifest.userConfig).length} options match hooks/model.ts`)
+console.log(`check-manifest: ok, ${Object.keys(manifest.userConfig).length} options match hooks/model.ts, and the name is ${NAME}`)
