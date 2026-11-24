@@ -24,8 +24,7 @@ export const SPRITE_ROLES: readonly string[] = [
 
 const CLAY = '#D97757'
 const INK = '#1F1E1D'
-const CAT_EAR = '#8E7CC3'
-const CAT_EAR_SH = '#6F5FA8'
+const CAT_EAR = '#A9CF9A'
 const GLASS = 'rgba(169,214,245,.32)'
 const STEEL = '#8E929A'
 const WOOD = '#7A4A26'
@@ -365,157 +364,123 @@ const CRAB_CSS = `<style>
 
 // ---------------------------------------------------------------- cat
 
-// A black cat drawn without an outline, facing forward and symmetrical about
-// column 14: a round head with large soft-tipped ears (lilac inside), big
-// pale-yellow eyes with tall pupils and no rim, a tiny nose and no mouth, black
-// whiskers, a pear-shaped body sitting upright with its front paws together, and
-// a tail that rises on its right and curls at the tip. One black for body, tail
-// and whiskers in light and dark alike (`ct-k`); one step lighter (`ct-l`) only
-// for the chest line and the paws; lilac lines for shut eyes (`ct-cl`). Three
-// bodies share one head: sitting (work, wait, done, planned), curled up asleep
-// (rest) and riding a broom (ride). The head and everything worn on it are drawn
-// in the sitting head's coordinates and moved into place for the curled cat.
+// A black cat with a big round head on a small body, drawn without an outline,
+// facing forward and symmetrical about column 14: two small upright ears, pale
+// green along their outer edge, two huge round cream eyes with tall black
+// pupils, no nose, mouth or whiskers, a body sitting upright on four legs told
+// apart by lines one step lighter, and a thick tail that rises up its right
+// side from a curl along the floor. One black for coat and pupils in light and
+// dark alike (`ct-k`); one step lighter (`ct-l`) for the leg lines and paws;
+// the eye's cream for the line of a shut eye (`ct-cl`). Three bodies share one
+// head: sitting (work, wait, done, planned), curled up asleep (rest) and riding
+// a broom (ride). The head and everything worn on it are drawn in the sitting
+// head's coordinates and moved into place for the curled cat.
 const FUR = '.ct-k'
 const FUR_LIT = '.ct-l'
 const SHUT = '.ct-cl'
-const EYE = '#F3EFA0'
-const NOSE = '#C7A2E0'
+const EYE = '#EEEBD6'
 const STRAW = '#E9C46A'
 const STRAW_SH = '#C9963A'
 const HANDLE = '#B07A45'
 const SPARK = '#F5C542'
-const CAT_MAP = { k: FUR, l: FUR_LIT, i: CAT_EAR, j: CAT_EAR_SH }
+const CAT_MAP = { k: FUR, l: FUR_LIT }
 
-// Rows given as their left half (columns 0-14, the centre column last) and
-// mirrored into whole rows, so the cat stays symmetrical.
-const sym = (rows: readonly string[]): string[] => rows.map(r => {
-  const half = r.padEnd(15, '.')
-  return half + [...half.slice(0, 14)].reverse().join('')
-})
+// The cat is drawn as rectangles of grid cells, [x, y, w, h], so a big shape
+// costs few <rect>s. `put` paints a list of them; `both` paints each one and its
+// mirror image about column 14, so the cat stays symmetrical.
+type Cells = readonly (readonly [x: number, y: number, w: number, h: number])[]
+const put = (f: Fill, cells: Cells, c: string, cls?: string): void => cells.forEach(([x, y, w, h]) => f(x, y, w, h, c, cls))
+const both = (f: Fill, cells: Cells, c: string, cls?: string): void =>
+  put(f, [...cells, ...cells.map(([x, y, w, h]) => [29 - x - w, y, w, h] as const)], c, cls)
 const shift = (f: Fill, dx: number): Fill => (x, y, w, h, c, cls) => f(x + dx, y, w, h, c, cls)
 
-// Every drawing below is written from column 0 so it reads as it sits on the grid.
-// The sitting head, ears from row 1 (a 2px tip) and the chin on row 16.
-const CAT_HEAD = sym([
-  '........kk',
-  '........kkk',
-  '.......kkikk',
-  '.......kkiikk',
-  '.......kkiiikkk',
-  '.......kkjiikkk',
-  '.......kkkkkkkk',
-  '.......kkkkkkkk',
-  '.......kkkkkkkk',
-  '.......kkkkkkkk',
-  '.......kkkkkkkk',
-  '.......kkkkkkkk',
-  '.......kkkkkkkk',
-  '.......kkkkkkkk',
-  '........kkkkkkk',
-  '..........kkkkk',
-])
-// An eye is 4 x 5, rows 9-13: a flat pale-yellow oval, a tall pupil one pixel
-// inward of centre, one white glint on the outer side.
-const EYE_LEFT = ['.YY.', 'YwPY', 'YYPY', 'YYPY', '.YY.']
-const EYE_RIGHT = ['.YY.', 'YPwY', 'YPYY', 'YPYY', '.YY.']
-// Shut: fur over the eye and a thin curved line.
-const EYE_SHUT = ['kkkk', 'kkkk', 'ckkc', 'kcck', 'kkkk']
-const LOOK = { Y: EYE, P: FUR, w: '#FFFFFF', k: FUR, c: SHUT }
-const EYE_X = [8, 17]
+// The head, rows 2-20 and columns 5-23: the skull (its crown on row 5, its chin
+// on row 20), then the left ear, a two-pixel edge stepping inwards from the
+// tip on row 2, with its green inside on the outer side (painted over the skull).
+const HEAD: Cells = [[5, 6, 19, 12], [6, 18, 17, 1], [7, 19, 15, 1], [9, 20, 11, 1], [12, 5, 5, 1]]
+const EAR_EDGE: Cells = [[5, 2, 2, 1], [6, 3, 2, 1], [7, 4, 2, 1], [8, 5, 2, 1]]
+const EAR_IN: Cells = [[5, 3, 1, 5], [6, 4, 1, 3], [7, 5, 1, 1]]
+// The left eye, 8 x 10 from (6, 9): a round cream disc and, painted over it in
+// the coat's black, a tall pupil. Narrowed (waiting), the brow cuts the disc
+// from the nose side down to the outer corner and the coat shows as the pupil.
+// Shut, a lid over the whole eye and a curved line in its lower half.
+const EYE_WIDE: Cells = [[8, 9, 4, 1], [7, 10, 6, 1], [6, 11, 8, 6], [7, 17, 6, 1], [8, 18, 4, 1]]
+const PUPIL: Cells = [[9, 11, 2, 6], [8, 12, 4, 4]]
+const EYE_NARROW: Cells = [[6, 12, 2, 5], [8, 13, 2, 1], [8, 14, 1, 1], [11, 14, 1, 1], [12, 15, 2, 2], [7, 17, 6, 1], [8, 18, 4, 1]]
+const EYE_LID: Cells = [[6, 9, 8, 10]]
+const EYE_SHUT: Cells = [[6, 15, 1, 1], [13, 15, 1, 1], [7, 16, 6, 1]]
+const EYE_X = [6, 15]
 
-// Sitting, rows 17-27: a short neck, the chest line down the middle, the haunches
-// widening at the floor, the hind feet at the sides and the front paws together
-// in the middle (their pixels are stamped separately so a raised paw can leave).
-const CAT_SIT = sym([
-  '...........kkkk',
-  '...........kkkl',
-  '..........kkkkl',
-  '..........kkkkl',
-  '..........kkkkk',
-  '.........kkkkkk',
-  '.........kkkkkk',
-  '........kkkkkkk',
-  '........kkkkkkk',
-  '........kkk.kkk',
-  '.........kk.kkk',
-])
-const PAW_L = 12
-const PAW_R = 15
+// Sitting, rows 21-27: a neck, a small body widening to the floor, and three
+// lighter lines that part its four legs.
+const CAT_SIT: Cells = [[11, 21, 7, 1], [10, 22, 9, 2], [9, 24, 11, 1], [8, 25, 13, 2], [9, 27, 11, 1]]
+const SIT_LINES: Cells = [[14, 24, 1, 4], [11, 25, 1, 3], [17, 25, 1, 3]]
 
-// The tail's still root along the floor (rows 23-26), and its moving part
-// (rows 5-22) in six frames of one travelling wave: the base leads, the tip
-// follows, curling in and opening out. Frame 3 is the rest position. Drawn from
-// column 20, clear of the whiskers.
-const TAIL_X = 20
-const TAIL_Y = 5
-const TAIL_ROOT = ['.....kk', '....kk', '..kkk', 'kkk']
-const TAIL: readonly (readonly string[])[] = [
-  ['...kk', '....kk', '.....kk', '......kk', '......kk', '......kk', '......kk', '......kk', '......kk', '......kk', '......kk', '......kk', '......kk', '......kk', '......kk', '......kk', '.....kk', '.....kk'],
-  ['...kk', '....kk', '.....kk', '......kk', '......kk', '......kk', '......kk', '......kk', '......kk', '.......kk', '.......kk', '.......kk', '.......kk', '.......kk', '.......kk', '.......kk', '......kk', '......kk'],
-  ['', '....kkk', '...kk.kk', '.......kk', '.......kk', '.......kk', '.......kk', '.......kk', '.......kk', '........kk', '........kk', '........kk', '........kk', '........kk', '.......kk', '.......kk', '......kk', '......kk'],
-  ['', '.....kkk', '....kk.kk', '....k...kk', '........kk', '........kk', '........kk', '........kk', '........kk', '........kk', '........kk', '........kk', '........kk', '........kk', '.......kk', '......kk', '.....kk', '.....kk'],
-  ['', '.....kkk', '....kk.kk', '....k...kk', '........kk', '........kk', '........kk', '........kk', '........kk', '........kk', '.......kk', '.......kk', '.......kk', '.......kk', '......kk', '.....kk', '.....kk', '.....kk'],
-  ['', '....kkk', '...kk.kk', '.......kk', '.......kk', '.......kk', '.......kk', '.......kk', '.......kk', '.......kk', '......kk', '......kk', '......kk', '......kk', '.....kk', '.....kk', '.....kk', '.....kk'],
-]
+// The tail, three pixels thick, written as `rows:columns` from the tip down. Its
+// root (rows 25-26) lies still along the floor; the rest is six frames of one
+// wave: the floor bend pulls in and the shaft bulges left low down (4), the
+// bulge climbs (5), reaches the tip and throws it left while the bend swings
+// out (0), the tip ducks (1), springs up tall (2) and settles (3, the still
+// tail). Beside the head (rows 2-20) the tail keeps to columns 25-29.
+const spans = (spec: string): Cells => spec.split(' ').map(s => {
+  const [rows = '', cols = ''] = s.split(':')
+  const [r0 = 0, r1 = r0] = rows.split('-').map(Number)
+  const [c0 = 0, c1 = c0] = cols.split('-').map(Number)
+  return [c0, r0, c1 - c0 + 1, r1 - r0 + 1] as const
+})
+const TAIL_ROOT = spans('25:20-25 26:20-23')
+const BEND = '20:26-29 21:26-28 22:25-28 23:24-27 24:22-26'
+const BEND_OUT = '22:26-29 23:25-28 24:23-27'
+const TAIL: readonly Cells[] = [
+  `8:26-27 9-11:25-28 12-13:25-27 14-15:26-28 16-21:27-29 ${BEND_OUT}`,
+  `10:25-26 11-13:25-28 14:26-28 15-21:27-29 ${BEND_OUT}`,
+  `6:27-28 7-9:26-29 10-19:27-29 ${BEND}`,
+  `8:27-28 9-11:26-29 12-19:27-29 ${BEND}`,
+  '8:27-28 9-11:26-29 12-13:27-29 14-15:26-28 16-20:25-27 21:24-27 22:23-26 23:22-25 24:21-24',
+  `7:27-28 8-10:26-29 11-12:26-28 13-16:25-27 17-18:26-28 19:27-29 ${BEND}`,
+].map(spans)
 const MID = 3
-// Waiting: the rest frame without its top, and the curled tip in three places for a flick.
-const FLICK_ROWS = 4
-const TIP_FLICK = [['', '.....kkk', '....kk.kk', '....k...kk'], ['', '.....kkk', '....kk.kk', '........kk'], ['.....kk', '......kk', '.......kk', '........kk']]
+// Waiting: the still tail without its tip (its first two spans), and the tip in
+// three places for a flick: at rest, ducked to the left, stretched up.
+const TIP_SPANS = 2
+const TIP_FLICK: readonly Cells[] = ['8:27-28 9-11:26-29', '9:26-27 10-11:25-28', '6:27-28 7-9:26-29 10-11:27-29'].map(spans)
 
-// Curled up asleep (rest): a round loaf of a body with the head tucked in on
-// the right, the haunch and a hind paw on the left, the front paws under the
-// chin, and the tail wrapped along the front with its tip curling past the paws.
-const REST_DX = 4
-const REST_DY = 8
-const CAT_CURL = [
-  '.......kkkkk',
-  '.....kkkkkkkk',
-  '....kkkkkkkkkk',
-  '...kkkkkkkkkkk',
-  '..kkkkkkkkkkkk',
-  '..kkkkkkkkkkk',
-  '.kkkkkkkkkkkk',
-  '.kkkkkkkkkkkk',
-  '.kkkkkkkkkkkk',
-  '.kkkkkkkkkkkk',
-  '.kkkkkkkkkkkk',
-  '..kkkkkkkkkkkk',
-  '..kkkkkkkkkkkkkkkkkkkkk',
-  '...kkkkkkkkkkkkkkkkkkkkk',
-  '.....kkkkkkkkkkkkkkkkkkk',
-]
-// The front paws under the chin, one step lighter.
-const CURL_PAWS = ['.............ll.ll']
+// Curled up asleep (rest): the head low on the floor, two columns right and
+// six rows down, its paws peeping out under the chin; behind it on the left the
+// small round body, whose top rises with the head at each breath; along the
+// floor in front the tail, its tip coming up on the right of the head.
+const REST_DX = 2
+const REST_DY = 6
+const CURL_BACK: Cells = [[2, 16, 4, 1], [1, 17, 5, 1], [1, 18, 6, 1]]
+const CAT_CURL: Cells = [...CURL_BACK, [0, 19, 11, 7], [1, 26, 26, 1], [2, 27, 25, 1]]
+const CURL_PAWS: Cells = [[13, 27, 2, 1], [18, 27, 2, 1]]
+// The tail's tip, drawn from column 27, row 23: flat, lifting, up (3, the still
+// one), curling in towards the head, coming down.
 const CURL_TIP: readonly (readonly string[])[] = [
-  ['', '', 'kkkk'],
-  ['', '...k', 'kkk'],
-  ['...k', '..k', 'kk'],
-  ['..k', '..k', 'kk'],
-  ['..kk', '.k', 'kk'],
-  ['', '..kk', 'kk'],
+  ['', '', '', 'kkk', 'kkk'],
+  ['', '', '..k', 'kkk', 'kk'],
+  ['', '..k', '.kk', 'kkk', 'kk'],
+  ['.k', '.kk', '.kk', 'kkk', 'kk'],
+  ['kk', '.kk', '.kk', 'kkk', 'kk'],
+  ['', '.kk', '.kk', 'kkk', 'kk'],
 ]
 
-// Riding (ride): the same head, a shorter body seated on the handle, legs
-// hanging over it, the tail rising on the right from the seat (RIDE_DY rows
-// higher), the straw on the left.
-const RIDE_DY = -4
-const CAT_RIDE = sym([
-  '...........kkkk',
-  '..........kkkkl',
-  '.........kkkkkl',
-  '.........kkkkkk',
-  '.........kkkkkk',
-])
-const RIDE_LEGS = sym(['.........kk.kk', '.........kk.kk', '.........ll.ll'])
-const RIDE_ROOT = ['....kk', '..kkk', 'kkk']
+// Riding (ride): the same head, a two-row body seated on the handle, four legs
+// hanging over it, the tail rising behind from the seat (RIDE_DY rows higher),
+// the straw on the left.
+const RIDE_DY = -3
+const CAT_RIDE: Cells = [[10, 21, 9, 1], [9, 22, 11, 1]]
+const RIDE_LEGS: Cells = [[9, 23, 2, 2], [12, 23, 2, 2], [15, 23, 2, 2], [18, 23, 2, 2]]
+const RIDE_PAWS: Cells = RIDE_LEGS.map(([x]) => [x, 25, 2, 1] as const)
 const BRISTLES = ['...SSSS', '.ssssssbb', 'SSSSSSSbb', 'sssssssbb', '.SSSSSSbb', '...ssss']
 
 // The raised paw: an arm two pixels thick from the shoulder to a 2 x 2 paw whose
 // top-left pixel is (x, y), drawn as rows from the paw's row down to the
-// shoulder's. A frame of the arm is [x, y, lean]: `lean` tips what the paw
-// holds, its top moving that many pixels right per row above the grip.
+// shoulder's, in front of the body, which stays whole behind it. A frame of the
+// arm is [x, y, lean]: `lean` tips what the paw holds, its top moving that many
+// pixels right per row above the grip.
 type Paw = readonly [x: number, y: number, lean?: number]
-const SHOULDER = [10, 18] as const
+const SHOULDER = [10, 22] as const
 const armRows = (px: number, py: number): string[] => {
   const [sx, sy] = SHOULDER
   const on = new Set<string>()
@@ -535,13 +500,15 @@ const armRows = (px: number, py: number): string[] => {
 }
 
 // What a costume draws with. `hat` paints over the head in the sitting head's
-// coordinates and goes wherever the head goes; `chest` paints over the chest
-// when sitting or riding. `hold` raises the left paw (the cat's right) and puts
-// the prop in it, only when sitting: `draw` paints the prop in the props' own
-// coordinates, grip at column 24 row 15, and `arc` gives the arm's frames (the
-// middle one is the still pose); `flip` mirrors the prop about its grip.
-// `ground` paints beside the cat and `sky` in the free top-right corner, both
-// only when sitting.
+// coordinates and goes wherever the head goes; `chest` paints over the body
+// when sitting or riding (riding, only its two rows above the handle). `hold`
+// raises the left paw (the cat's right) and puts the prop in it, only when
+// sitting: `draw` paints the prop in the props' own coordinates, grip at column
+// 24 row 15, and `arc` gives the arm's frames (the middle one is the still
+// pose); `flip` mirrors the prop about its grip. The head leaves columns 0-4
+// free on its left, so a prop is held there, in front of the head where it is
+// wider. `ground` paints beside the cat and `sky` in the free top-right corner,
+// both only when sitting.
 type CatKit = {
   hat: Fill
   chest: Fill
@@ -555,18 +522,12 @@ const CATS: Record<string, CatCostume> = {
   main: () => {},
   // A glass dome over head and ears on a collar whose lights blink; a star twinkles.
   ace: (k, t) => {
-    const inset = [9, 6, 5, 4, 4, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 4, 5]
-    inset.forEach((l, y) => {
-      const prev = inset[y - 1] ?? l
-      const edge = y === 0 ? 29 - 2 * l : Math.max(1, prev - l)
-      k.hat(l, y, edge, 1, '#E6E8EE')
-      k.hat(29 - l - edge, y, edge, 1, '#E6E8EE')
-      if (y > 0 && 29 - 2 * (l + edge) > 0) k.hat(l + edge, y, 29 - 2 * (l + edge), 1, 'rgba(169,214,245,.16)')
-    })
-    k.hat(6, 3, 1, 1, '#fff'); k.hat(5, 4, 1, 2, '#fff')
-    k.hat(5, 17, 19, 1, '#C9CCD2')
-    k.hat(8, 17, 1, 1, t, 'ant'); k.hat(20, 17, 1, 1, t, 'ant')
-    k.chest(13, 19, 3, 2, t)
+    put(k.hat, [[8, 2, 13, 1], [5, 3, 19, 16], [7, 19, 15, 1], [9, 20, 11, 1]], 'rgba(169,214,245,.16)')
+    put(k.hat, [[8, 1, 13, 1], [4, 2, 4, 1], [21, 2, 4, 1], [4, 3, 1, 16], [24, 3, 1, 16], [5, 19, 2, 1], [22, 19, 2, 1], [7, 20, 2, 1], [20, 20, 2, 1]], '#E6E8EE')
+    k.hat(9, 3, 2, 1, '#fff'); k.hat(9, 4, 1, 1, '#fff')
+    k.hat(9, 21, 11, 1, '#C9CCD2')
+    k.hat(11, 21, 1, 1, t, 'ant'); k.hat(17, 21, 1, 1, t, 'ant')
+    k.chest(13, 23, 3, 2, t)
     k.sky(27, 1, 1, 3, '#F5C542', 'star'); k.sky(26, 2, 3, 1, '#F5C542', 'star')
   },
   // A tweed deerstalker between the ears, its flaps tied on top; the magnifier sweeps left to right.
@@ -575,13 +536,13 @@ const CATS: Record<string, CatCostume> = {
     k.hold(f => {
       stamp(f, 22, 5, ['.kkk.', 'k...k', 'k...k', 'k...k', '.kkk.'], { k: '#6B6B70' })
       f(23, 6, 3, 3, 'rgba(169,214,245,.7)'); f(24, 10, 1, 5, WOOD); f(23, 6, 1, 1, '#fff', 'gl')
-    }, [[2, 14], [3, 13], [4, 14]])
+    }, [[2, 18], [2, 17], [3, 18]])
   },
-  // A hard hat over the ear roots with a badge in the accent colour; the wrench turns about its jaw.
+  // A hard hat between the ears with a badge in the accent colour; the wrench turns about its jaw.
   engineer: (k, t) => {
     stamp(k.hat, 8, 3, ['.....yhy', '...yyyhyyy', '..yyyyhyyyy', '..yyyyhyyyy', '.yyyyyhyyyyy', 'ddddddddddddd'], { y: '#F5C542', h: '#FBE08A', d: '#C99A1E' })
     k.hat(11, 5, 2, 2, t)
-    k.hold(f => stamp(f, 22, 6, ['ss.ss', 'ss.ss', 'sssss', '.sss.', '..s..', '..s..', '..s..', '..s..', '..s..'], { s: STEEL }), [[4, 15, -0.25], [3, 14], [2, 15, 0.25]])
+    k.hold(f => stamp(f, 22, 6, ['ss.ss', 'ss.ss', 'sssss', '.sss.', '..s..', '..s..', '..s..', '..s..', '..s..'], { s: STEEL }), [[4, 19, -0.25], [3, 18], [2, 19, 0.25]])
   },
   // A tall toque between the ears; stirs the pan round and tosses the omelette.
   chef: (k, t) => {
@@ -589,68 +550,65 @@ const CATS: Record<string, CatCostume> = {
     k.hold(f => {
       f(25, 13, 5, 1, '#5A5A58'); f(25, 12, 1, 1, '#5A5A58'); f(29, 12, 1, 1, '#5A5A58'); f(24, 14, 1, 1, '#5A5A58')
       f(26, 12, 3, 1, '#F5B731', 'egg')
-    }, [[5, 17], [5, 15], [6, 16]], true)
+    }, [[5, 21], [5, 19], [6, 20]], true)
   },
-  // A racing helmet the ear tips poke out of; the checkered flag waves from side to side.
+  // A racing helmet between the ears; the checkered flag waves from side to side.
   sprinter: (k, t) => {
     stamp(k.hat, 8, 4, ['....rrwrr', '..rrrrwrrrr', '.rrrrrwrrrrr', 'rrrrrrwrrrrrr', 'kkkkkkkkkkkkk'], { r: t, w: '#F8F6F1', k: '#0F5C44' })
-    k.hold(f => { f(24, 5, 1, 10, STEEL); stamp(f, 25, 5, ['wkwk', 'kwkw', 'wkwk'], { w: '#F8F6F1', k: '#4A4A52' }, 'flag') }, [[4, 15, 0.2], [4, 14], [6, 15, -0.2]], true)
+    k.hold(f => { f(24, 5, 1, 10, STEEL); stamp(f, 25, 5, ['wkwk', 'kwkw', 'wkwk'], { w: '#F8F6F1', k: '#4A4A52' }, 'flag') }, [[4, 19, 0.2], [4, 18], [6, 19, -0.2]], true)
   },
   // A pirate's hat with a band in the accent colour, a patch over one eye; the cutlass thrusts.
   scout: (k, t) => {
     stamp(k.hat, 8, 3, ['....kkkkk', '...kkkwkkk', '..kkkkkkkkk', 'k.ttttttttt.k', 'ggggggggggggg'], { k: '#55514C', w: '#F8F6F1', t, g: '#F5C542' })
-    stamp(k.hat, 17, 8, ['...p', 'pppp', 'pppp', 'pppp', 'pppp', '.pp.'], { p: '#55514C' })
-    k.hold(f => { f(24, 4, 1, 10, '#C9CCD2'); f(23, 14, 3, 1, WOOD) }, [[4, 16, 0.15], [3, 14], [2, 13, -0.2]])
+    put(k.hat, [[20, 8, 3, 1], [17, 9, 4, 10], [16, 10, 6, 8], [15, 11, 8, 6]], '#55514C')
+    k.hold(f => { f(24, 4, 1, 10, '#C9CCD2'); f(23, 14, 3, 1, WOOD) }, [[4, 20, 0.15], [3, 18], [2, 17, -0.2]])
   },
   // A beret tilted over the right ear; the brush dabs forward and back.
   designer: (k, t) => {
     stamp(k.hat, 9, 3, ['.......s', '....ppppppp', '..pphpppppppp', '.pphppppppppppp', '...ddddddddd'], { p: t, h: '#EC8FAF', s: '#9C3458', d: '#9C3458' })
-    k.hold(f => brush(f, 5, t), [[3, 16, 0.1], [3, 14], [2, 12, -0.1]])
+    k.hold(f => brush(f, 5, t), [[2, 20, 0.1], [2, 18], [1, 16, -0.1]])
   },
-  // Round glasses in the accent colour; the quill scribbles.
+  // Big glasses in the accent colour, one frame round each eye; the quill scribbles.
   writer: (k, t) => {
-    const ring = ['.aaaa.', 'a....a', 'a....a', 'a....a', 'a....a', 'a....a', '.aaaa.']
-    stamp(k.hat, 7, 8, ring, { a: t }); stamp(k.hat, 16, 8, ring, { a: t })
-    k.hat(13, 10, 3, 1, t)
-    k.hold(f => quill(f, 5, t), [[4, 15], [5, 14], [4, 14]], true)
+    put(k.hat, [[7, 8, 6, 1], [16, 8, 6, 1], [5, 10, 1, 8], [14, 10, 1, 8], [23, 10, 1, 8], [7, 19, 6, 1], [16, 19, 6, 1]], t)
+    k.hold(f => quill(f, 5, t), [[4, 19], [5, 18], [4, 18]], true)
   },
   // Safety goggles on a strap; the flask swirls and bubbles.
   tester: (k, t) => {
-    k.hat(5, 10, 2, 1, '#6B6B74'); k.hat(22, 10, 2, 1, '#6B6B74')
-    for (const x of EYE_X) {
-      stamp(k.hat, x - 1, 8, ['aaaaaa', 'a....a', 'a....a', 'a....a', 'a....a', 'a....a', 'aaaaaa'], { a: t })
-      k.hat(x, 9, 4, 5, 'rgba(169,214,245,.3)')
-    }
-    k.hold(f => flask(f, 5, t), [[3, 15, -0.12], [4, 14], [3, 15, 0.12]])
+    k.hat(5, 9, 1, 9, '#6B6B74'); k.hat(23, 9, 1, 9, '#6B6B74')
+    put(k.hat, [[5, 8, 19, 1], [14, 9, 1, 10], [7, 19, 15, 1]], t)
+    for (const x of EYE_X) k.hat(x, 9, 8, 10, 'rgba(169,214,245,.3)')
+    k.hold(f => flask(f, 5, t), [[1, 19, -0.12], [2, 18], [1, 19, 0.12]])
   },
   // A judge's wig the ears poke through, its rolls tied in the accent colour; a
   // lace jabot; the gavel taps.
   reviewer: (k, t) => {
-    stamp(k.hat, 6, 4, [
-      '.....wwwwwww', '...wwgwwwwwgww', '.wwwgwwwwwwwgwww', 'ww.............ww', 'gw.............wg',
-      'ww.............ww', 'wg.............gw', 'ww.............ww', 'gw.............wg',
+    stamp(k.hat, 4, 4, [
+      '.......wwwwwww', '.....wwgwwwwwgww', '...wwwgwwwwwwwgwww', '..ww.............ww', 'ww.................ww', 'gw.................wg',
+      'ww.................ww', 'wg.................gw', 'ww.................ww', 'gw.................wg', 'ww.................ww', 'wg.................gw',
     ], { w: '#ECEAE2', g: '#BDBBB0' })
-    k.hat(6, 13, 2, 1, t); k.hat(21, 13, 2, 1, t)
-    stamp(k.chest, 12, 17, ['wwwww', '.wgw.', '.www.'], { w: '#ECEAE2', g: '#BDBBB0' })
-    k.hold(f => gavel(f, 5, t), [[1, 12], [2, 14], [2, 16]])
+    k.hat(4, 16, 2, 1, t); k.hat(23, 16, 2, 1, t)
+    stamp(k.chest, 12, 21, ['wwwww', '.wgw.', '.www.'], { w: '#ECEAE2', g: '#BDBBB0' })
+    k.hold(f => gavel(f, 5, t), [[1, 16], [2, 18], [2, 20]])
   },
   // A visor whose brim juts out over the eyes; beside the cat the bars of the chart rise.
   analyst: (k, t) => {
-    k.hat(7, 7, 15, 1, '#8F6210')
-    k.hat(6, 8, 17, 1, t); k.hat(6, 8, 4, 1, '#E9B955')
+    k.hat(6, 7, 17, 1, '#8F6210')
+    k.hat(4, 8, 21, 1, t); k.hat(4, 8, 4, 1, '#E9B955')
     chart(shift(k.ground, -23), 18, t)
   },
-  // A pencil in the accent colour tucked behind the right ear; the blueprint sways.
+  // A pencil in the accent colour across the crown, its point tucked behind the
+  // right ear (the ear's edge is painted again over it); the blueprint sways.
   planner: (k, t) => {
-    stamp(k.hat, 13, 4, ['ettttttttwg', 'ettttttttww'], { e: '#E58FA6', t, w: '#F0D2A0', g: '#4A4A48' })
-    stamp(k.hat, 16, 4, ['kkiik', 'kkiik'], CAT_MAP)
-    k.hold(f => stamp(f, 22, 8, ['llllll', 'bwbbwb', 'wwwwww', 'bwbbwb', 'bwbbwb', 'wwwwww', 'bwbbwb'], { b: t, l: '#A9C0E0', w: '#DCE6F5' }), [[3, 15, -0.1], [3, 14], [2, 15, 0.1]])
+    stamp(k.hat, 10, 4, ['ettttttttwg', 'ettttttttww'], { e: '#E58FA6', t, w: '#F0D2A0', g: '#4A4A48' })
+    k.hat(20, 4, 1, 1, FUR); k.hat(19, 5, 2, 1, FUR)
+    k.hold(f => stamp(f, 22, 8, ['llllll', 'bwbbwb', 'wwwwww', 'bwbbwb', 'bwbbwb', 'wwwwww', 'bwbbwb'], { b: t, l: '#A9C0E0', w: '#DCE6F5' }), [[4, 19, -0.1], [2, 18], [2, 19, 0.1]])
   },
   // A bandana tied over the head between the ears; the knot's tails flutter.
   helper: (k, t) => {
-    stamp(k.hat, 8, 4, ['.....ggg', '...gglgggg', '..ggggglggg', '.gglgggggggg', 'ddddddddddddd'], { g: t, l: '#B9B7AE', d: '#5F5E5A' })
-    k.hat(7, 7, 1, 2, '#5F5E5A')
-    stamp(k.hat, 4, 8, ['.gg', 'gg.', 'dg.'], { g: t, d: '#5F5E5A' }, 'tie')
+    stamp(k.hat, 8, 4, ['.....ggg', '...gglgggg', '..ggggglggg', '.gglgggggggg'], { g: t, l: '#B9B7AE' })
+    k.hat(5, 8, 19, 1, '#5F5E5A')
+    stamp(k.hat, 2, 8, ['.gg', 'gg.', 'dg.'], { g: t, d: '#5F5E5A' }, 'tie')
   },
 }
 
@@ -677,54 +635,56 @@ const catMarkup = (role: string, pose: string, accent: string): string => {
 
   // The tail: six frames where it waves; one still frame, or a flicking tip, elsewhere.
   const isWaving = isWork || pose === 'done' || isRide
+  const still = TAIL[MID] ?? []
   if (isRest) {
-    CURL_TIP.forEach((rows, n) => stamp(tail, 24, 24, rows, CAT_MAP, `t${n}`))
+    CURL_TIP.forEach((rows, n) => stamp(tail, 27, 23, rows, CAT_MAP, `t${n}`))
   } else {
-    stamp(tl, TAIL_X, 23, isRide ? RIDE_ROOT : TAIL_ROOT, CAT_MAP)
-    if (isWaving) TAIL.forEach((rows, n) => stamp(tl, TAIL_X, TAIL_Y, rows, CAT_MAP, `t${n}`))
+    put(tl, TAIL_ROOT, FUR)
+    if (isWaving) TAIL.forEach((cells, n) => put(tl, cells, FUR, `t${n}`))
     else if (pose === 'wait') {
-      stamp(tl, TAIL_X, TAIL_Y + FLICK_ROWS, (TAIL[MID] ?? []).slice(FLICK_ROWS), CAT_MAP)
-      TIP_FLICK.forEach((tip, n) => stamp(tl, TAIL_X, TAIL_Y, tip, CAT_MAP, `k${n}`))
-    } else stamp(tl, TAIL_X, TAIL_Y, TAIL[MID] ?? [], CAT_MAP)
+      put(tl, still.slice(TIP_SPANS), FUR)
+      TIP_FLICK.forEach((tip, n) => put(tl, tip, FUR, `k${n}`))
+    } else put(tl, still, FUR)
   }
 
   // The body.
   if (isRest) {
-    stamp(body, 0, 12, CAT_CURL, CAT_MAP)
-    stamp(body, 0, 25, CURL_PAWS, CAT_MAP)
+    put(body, CAT_CURL, FUR)
+    put(body, CURL_PAWS, FUR_LIT)
     // The back rises with each breath, along with the head.
-    stamp(head, 0, 12, CAT_CURL.slice(0, 3), CAT_MAP)
+    put(head, CURL_BACK, FUR)
   } else if (isRide) {
-    stamp(body, 0, 20, BRISTLES, { S: STRAW, s: STRAW_SH, b: WOOD })
-    body(9, 22, 21, 1, HANDLE); body(9, 23, 21, 1, WOOD)
-    stamp(body, 0, 17, CAT_RIDE, CAT_MAP)
-  } else stamp(body, 0, 17, CAT_SIT, CAT_MAP)
-
-  // The head: ears, eyes, nose, whiskers; no mouth.
-  stamp(hd, 0, 1, CAT_HEAD, CAT_MAP)
-  // Both eyes before either lid, so the blink covers both.
-  EYE_X.forEach((x, n) => stamp(hd, x, 9, isRest ? EYE_SHUT : n ? EYE_RIGHT : EYE_LEFT, LOOK))
-  if (isWork || pose === 'done') for (const x of EYE_X) stamp(hd, x, 9, EYE_SHUT, LOOK, 'bl')
-  hd(14, 14, 1, 1, NOSE)
-  // Two fine whiskers a side, fanning out from the cheeks.
-  for (const [x, tip] of [[5, 4], [22, 24]] as const) {
-    hd(x, 12, 2, 1, FUR); hd(tip, 11, 1, 1, FUR); hd(x, 14, 2, 1, FUR); hd(tip, 15, 1, 1, FUR)
+    stamp(body, 0, 21, BRISTLES, { S: STRAW, s: STRAW_SH, b: WOOD })
+    body(9, 23, 21, 1, HANDLE); body(9, 24, 21, 1, WOOD)
+    put(body, CAT_RIDE, FUR)
+  } else {
+    put(body, CAT_SIT, FUR)
+    put(body, SIT_LINES, FUR_LIT)
   }
 
-  // The costume, then the paws it leaves down.
-  let isRaised = false
+  // The head: skull, ears, eyes. No nose, mouth or whiskers.
+  put(hd, HEAD, FUR)
+  both(hd, EAR_EDGE, FUR)
+  both(hd, EAR_IN, CAT_EAR)
+  if (isRest) both(hd, EYE_SHUT, SHUT)
+  else if (pose === 'wait') both(hd, EYE_NARROW, EYE)
+  else { both(hd, EYE_WIDE, EYE); both(hd, PUPIL, FUR) }
+  // Both eyes before either lid, so the blink covers both.
+  if (isWork || pose === 'done') { both(hd, EYE_LID, FUR, 'bl'); both(hd, EYE_SHUT, SHUT, 'bl') }
+
+  // The costume.
   const arms: string[] = []
   const kit: CatKit = {
     hat: hd,
-    chest: isRest ? none : body,
+    // Riding, only the two body rows above the handle.
+    chest: isRest ? none : isRide ? (x, y, w, h, c, cls) => { if (y < 23) body(x, y, w, Math.min(h, 23 - y), c, cls) } : body,
     ground: isSit ? front : none,
     sky: isSit ? front : none,
     hold: (draw, arc, flip = false) => {
       if (!isSit) return
-      isRaised = true
-      const still = Math.floor(arc.length / 2)
+      const mid = Math.floor(arc.length / 2)
       arc.forEach(([px, py, lean = 0], n) => {
-        if (!isWork && n !== still) return
+        if (!isWork && n !== mid) return
         const l = isWork ? newLayer() : frontL
         const f = fillOf(l)
         // Into the paw: mirrored if asked, tipped by `lean` row by row above the
@@ -749,11 +709,8 @@ const catMarkup = (role: string, pose: string, accent: string): string => {
   }
   const dress = CATS[role] ?? CATS.helper
   dress?.(kit, accent)
-  if (isSit) {
-    stamp(body, PAW_R, 26, ['ll', 'll'], CAT_MAP)
-    if (!isRaised) stamp(body, PAW_L, 26, ['ll', 'll'], CAT_MAP)
-  }
-  if (isRide) stamp(body, 0, 22, RIDE_LEGS, CAT_MAP)
+  // The legs hang over the handle, in front of whatever the chest wears.
+  if (isRide) { put(body, RIDE_LEGS, FUR); put(body, RIDE_PAWS, FUR_LIT) }
 
   const g = (cls: string, l: Layer, more = ''): string => `<g class="ct-${cls}">${emit(l, 'ct-')}${more}</g>`
   if (isRest) return g('bd', bodyL) + g('br', headL) + g('tail', tailL)
@@ -787,10 +744,12 @@ ${['writer', 'reviewer'].map(r => [0, 1, 2].map(n => `.ct-r-${r}.ct-work .ct-a${
 // Work-loop periods divide one second, so a 1s tail cycle, 1s or .5s arm swings
 // and a 1s broom bob keep in step with each other. A drawing redrawn while it runs
 // sets every loop's phase by the clock (draw.ts, `loopAnchors`), so a redraw does
-// not start them over. The coat is one black in light and dark mode alike.
+// not start them over. The coat is one black in light and dark mode alike; the
+// line of a shut eye is the eye's own cream, set here so the sleeping cat's
+// markup holds no eye colour.
 const CAT_CSS = `<style>
 .ct g{transform-box:fill-box}
-.ct-k{fill:#0B0B0D}.ct-l{fill:#18181C}.ct-cl{fill:#8E7CC3}
+.ct-k{fill:#0B0B0D}.ct-l{fill:#18181C}.ct-cl{fill:#EEEBD6}
 ${TAIL.map((_, n) => (n === MID ? '' : `.ct-t${n}`)).filter(Boolean).join(',')},.ct-k1,.ct-k2,.ct-bl{opacity:0}
 ${FRAME_CSS}
 ${frames('rest')},${frames('done')}{animation-duration:3s}
