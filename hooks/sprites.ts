@@ -402,7 +402,7 @@ const EAR_EDGE: Cells = [[5, 2, 2, 1], [6, 3, 2, 1], [7, 4, 2, 1], [8, 5, 2, 1]]
 const EAR_IN: Cells = [[5, 3, 1, 5], [6, 4, 1, 3], [7, 5, 1, 1]]
 // The left eye, 8 x 10 from (6, 9): a round cream disc and, painted over it in
 // the coat's black, a tall pupil. Narrowed (waiting), the brow cuts the disc
-// from the nose side down to the outer corner and the coat shows as the pupil.
+// from the inner side down to the outer corner and the coat shows as the pupil.
 // Shut, a lid over the whole eye and a curved line in its lower half.
 const EYE_WIDE: Cells = [[8, 9, 4, 1], [7, 10, 6, 1], [6, 11, 8, 6], [7, 17, 6, 1], [8, 18, 4, 1]]
 const PUPIL: Cells = [[9, 11, 2, 6], [8, 12, 4, 4]]
@@ -721,7 +721,7 @@ const catMarkup = (role: string, pose: string, accent: string): string => {
         // grip. The prop's own motion groups give way to the arm's frames; its
         // small inner ones (a glint, the egg, the flag's cloth, bubbles) stay.
         const at: Fill = (x, y, w, h, c, cls) => {
-          const inner = cls === 'it' || cls === 'pan' ? undefined : cls
+          const inner = cls === 'it' ? undefined : cls
           const off = (row: number): number => Math.round(lean * (15 - row))
           let r = 0
           while (r < h) {
