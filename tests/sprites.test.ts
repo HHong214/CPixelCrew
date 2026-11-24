@@ -827,3 +827,51 @@ test('spriteDoc wraps one sprite and its CSS in a whole svg', async () => {
   })
   expect(spriteDoc({ theme: 'cat', role: 'main', pose: 'done', scale: 3 })).toContain('width="90" height="84"')
 })
+
+test('the blink: the lids are drawn in work and done only, and cover both open eyes', async () => {
+  const eyeCells: string[] = []
+  SIT_ROWS.forEach((row, y) => [...row].forEach((c, x) => { if (c === 'c') eyeCells.push(`${x},${y}`) }))
+  // The two 8 x 10 eyes, columns 6-13 and 15-22, rows 9-18, as the contract grid has them.
+  expect(`eye cells ${eyeCells.length}`).toBe('eye cells 96')
+  for (const role of SPRITE_ROLES) for (const pose of POSES) {
+    const g = draw('cat', role, pose)
+    const has = pose === 'work' || pose === 'done'
+    expect(`${role}/${pose} lids ${g.includes('<g class="ct-bl">')}`).toBe(`${role}/${pose} lids ${has}`)
+  }
+  for (const role of SPRITE_ROLES) {
+    const lid = new Set(cellsOf(rectsIn(draw('cat', role, 'work'), 'ct-bl')).map(c => c.join(',')))
+    const bare = eyeCells.filter(c => !lid.has(c))
+    expect(`${role} eye cells without a lid ${bare.join(' ')}`).toBe(`${role} eye cells without a lid `)
+    // Nothing of the lid strays outside the two eyes' boxes.
+    const out = [...lid].filter(c => { const [x = 0, y = 0] = c.split(',').map(Number); return y < 9 || y > 18 || x < 6 || x > 22 || x === 14 })
+    expect(`${role} lid outside the eyes ${out.join(' ')}`).toBe(`${role} lid outside the eyes `)
+  }
+})
+
+test('asleep, the writer, tester and scout wear their eyewear flat over the shut eyes, not round open ones', async () => {
+  // The colour each costume's eyewear is painted in: the kind's accent for the
+  // rings and the goggle rim, the patch's own grey for the scout.
+  const colour: Record<string, string> = { writer: '#B56BC7', tester: '#5BA23B', scout: '#55514C' }
+  const wear = (role: string, pose: 'rest' | 'done'): { cells: number; w: number; h: number } => {
+    // The scout's hat shares the grey but sits above the patch (rows 3-7; 9-13 asleep).
+    const from = role === 'scout' ? (pose === 'rest' ? 14 : 8) : 0
+    const cells = cellsOf(tintsOf(headAndBody(without(draw('cat', role, pose), ['ct-bl']))).filter(p => p[4] === colour[role])).filter(([, y]) => y >= from)
+    const [x0, y0, x1, y1] = [Math.min(...cells.map(c => c[0])), Math.min(...cells.map(c => c[1])), Math.max(...cells.map(c => c[0])) + 1, Math.max(...cells.map(c => c[1])) + 1]
+    return { cells: cells.length, w: x1 - x0, h: y1 - y0 }
+  }
+  for (const role of ['writer', 'tester']) {
+    const [asleep, sitting] = [wear(role, 'rest'), wear(role, 'done')]
+    // Rings and goggles: 6 rows tall asleep, 12 sitting; the sitting ones are at least twice as tall less 1.
+    expect(`${role} flat asleep ${asleep.h <= 8}`).toBe(`${role} flat asleep true`)
+    expect(`${role} round awake ${sitting.h >= 10}`).toBe(`${role} round awake true`)
+    expect(`${role} flatter by 4 rows ${sitting.h - asleep.h >= 4}`).toBe(`${role} flatter by 4 rows true`)
+    // Both lenses, side by side, in either pose.
+    expect(`${role} width ${asleep.w >= 16 && sitting.w >= 16}`).toBe(`${role} width true`)
+  }
+  // The patch: one tall eye patch awake (taller than wide), asleep a flat one with
+  // its strap, wider than tall and with under half the cells.
+  const [asleep, sitting] = [wear('scout', 'rest'), wear('scout', 'done')]
+  expect(`scout awake taller than wide ${sitting.h > sitting.w}`).toBe('scout awake taller than wide true')
+  expect(`scout asleep wider than tall ${asleep.w > asleep.h}`).toBe('scout asleep wider than tall true')
+  expect(`scout asleep under half the cells ${asleep.cells * 2 < sitting.cells}`).toBe('scout asleep under half the cells true')
+})
