@@ -459,9 +459,23 @@ describe('drawings', () => {
 
   test('decision 4: mascots sit on whole pixels at the scales they had', async () => {
     const translates = (src: string): string[] => [...src.matchAll(/<g transform="translate\(([^)]*)\) scale\(([\d.]+)\)"/g)].map(m => `${m[1]} ${m[2]}`)
-    for (const t of translates(agentDrawing(ctx, agent()).source)) expect(t).toMatch(/^-?\d+,-?\d+ 2\.2$/)
-    for (const t of translates(mainDrawing(ctx, blankMain(at), 0, blankUsage(at)).source)) expect(t).toMatch(/^-?\d+,-?\d+ 4\.8$/)
+    // Without the hero card (with it, the card sits on whole pixels and the mascot 2K inside it, as below).
+    const bare = { ...ctx, settings: { ...DEFAULT_SETTINGS, heroCard: false } }
+    for (const t of translates(agentDrawing(bare, agent()).source)) expect(t).toMatch(/^-?\d+,-?\d+ 2\.2$/)
+    for (const t of translates(mainDrawing(bare, blankMain(at), 0, blankUsage(at)).source)) expect(t).toMatch(/^-?\d+,-?\d+ 4\.8$/)
     for (const t of translates(progressDrawing(runFlow, 480, DEFAULT_SETTINGS, 'running', 3, 1).source)) expect(t).toMatch(/^-?\d+,-?\d+ 0\.8$/)
+    // The hero card (contract-hero-card.md): the card on whole pixels, the mascot exactly 2K in from its corner.
+    const carded = { ...ctx, settings: { ...DEFAULT_SETTINGS, heroCard: true } }
+    for (const [src, k] of [
+      [agentDrawing(carded, agent()).source, 2.2],
+      [mainDrawing(carded, blankMain(at), 0, blankUsage(at)).source, 4.8],
+    ] as const) {
+      const card = /<g class="hero" transform="translate\((-?\d+),(-?\d+)\) scale\(([\d.]+)\)"/.exec(src)
+      expect(card?.[3]).toBe(String(k))
+      const mascot = translates(src.slice(src.indexOf('</g>', card?.index ?? 0)))[0]?.split(/[ ,]/).map(Number) ?? []
+      expect(Math.abs((mascot[0] ?? NaN) - (Number(card?.[1]) + 2 * k)) < 0.006 && Math.abs((mascot[1] ?? NaN) - (Number(card?.[2]) + 2 * k)) < 0.006).toBe(true)
+      expect(mascot[2]).toBe(k)
+    }
   })
 })
 

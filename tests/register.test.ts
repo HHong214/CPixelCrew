@@ -91,11 +91,12 @@ type Boot = {
   app: { answer: unknown }
   stored: Record<string, unknown>
 }
-type BootOptions = { stored?: Record<string, unknown>; fx?: string; isBroken?: boolean; usage?: unknown; deny?: string; app?: unknown; surfaces?: string[] }
+type BootOptions = { stored?: Record<string, unknown>; fx?: string; isBroken?: boolean; usage?: unknown; deny?: string; storeDeny?: Record<string, string>; app?: unknown; surfaces?: string[] }
 
 // Everything beneath the plugin is answered here, as the engine would.
 // `isBroken`: the engine's usage and model reads fail, as on a host that has neither.
 // `deny`: the settings refuse every option change with that reason.
+// `storeDeny`: the store refuses a write to each key named, with that reason; nothing is stored.
 // `app`: what the app's usage tool answers; left out, the call fails as on a host without it.
 async function boot($: Engine, on: On, o: BootOptions = {}): Promise<Boot> {
   const stored = o.stored ?? {}
@@ -117,6 +118,8 @@ async function boot($: Engine, on: On, o: BootOptions = {}): Promise<Boot> {
   on('tool.call', (() => ({ result: 'file text' })) as never)
   on('store.get', ((_$: unknown, e: { key: string }) => ({ value: stored[e.key] })) as never)
   on('store.set', ((_$: unknown, e: { key: string; value: unknown }) => {
+    const refused = o.storeDeny?.[e.key]
+    if (refused !== undefined) return { deny: refused }
     writes.push({ key: e.key, value: e.value })
     stored[e.key] = e.value
     return { value: undefined }
@@ -606,7 +609,8 @@ for (const surface of SURFACES) {
     const { configs, writes, clock } = await boot($, on)
     const sp = await settingsPane($, surface)
     const headings = (await sp.findAll({ type: 'Text' })).filter(t => t.props.size === 'heading')
-    expect(headings.map(t => t.text)).toEqual(['Sizes', 'Bar items order'])
+    // The hero card's Look part (contract-hero-card.md) sits between the steppers and the bar order.
+    expect(headings.map(t => t.text)).toEqual(['Sizes', 'Look', 'Bar items order'])
     for (const h of headings) expect(h.props).toMatchObject({ weight: 'semibold' })
     const text = await words(sp)
     expect(text).toContain('Sizes are set here. Each press saves at once.')
@@ -615,9 +619,9 @@ for (const surface of SURFACES) {
     // The dim closing line stays last.
     const texts = (await sp.findAll({ type: 'Text' })).map(t => t.text)
     expect(texts.at(-1)).toBe('Everything else is under Customize > Plugins > CPixelCrew.')
-    // Eight stepper buttons, then ▲ and ▼ per bar item, and nothing else: no Select, no Input, no checkbox, no reset.
+    // Eight stepper buttons, the hero card's one, then ▲ and ▼ per bar item, and nothing else: no Select, no Input, no checkbox, no reset.
     const keys = (await sp.findAll({ type: 'Button' })).map(b => b.key)
-    expect(keys).toEqual([...['textSize', 'iconSize', 'barSize', 'logLines'].flatMap(k => [`size-${k}-down`, `size-${k}-up`]), ...ORDER.flatMap(k => [`up-${k}`, `down-${k}`])])
+    expect(keys).toEqual([...['textSize', 'iconSize', 'barSize', 'logLines'].flatMap(k => [`size-${k}-down`, `size-${k}-up`]), 'hero-card', ...ORDER.flatMap(k => [`up-${k}`, `down-${k}`])])
     expect(await sp.findAll({ type: 'Select' })).toHaveLength(0)
     expect(await sp.findAll({ type: 'Input' })).toHaveLength(0)
 
@@ -880,6 +884,250 @@ test('desktop: with animations off nothing enters', { options: { animations: fal
   await $.command.run({ command: 'crew', args: 'open' } as never)
   const p = await pane($, 'desktop')
   expect(await words(p)).not.toMatch(/animation-delay:\s*-\d+ms/)
+  await p.unmount()
+})
+
+// The hero card (contract-hero-card.md): on by default, behind the panel's mascots only.
+const heroCards = (text: string): number => (text.match(/<g class="hero"/g) ?? []).length
+
+test('desktop: by default the panel draws a hero card behind its mascot; the bar and the other panes draw none', async ($, on) => {
+  await boot($, on)
+  await startTurn($)
+  const p = await pane($, 'desktop')
+  const panel = await words(p)
+  expect(panel).toContain('Claude')
+  expect(heroCards(panel)).toBeGreaterThan(0)
+  await p.unmount()
+  const bar = await band($, 'desktop')
+  const barWords = await words(bar)
+  expect(barWords.length).toBeGreaterThan(0)
+  expect(barWords).not.toMatch(/hero/)
+  await bar.unmount()
+  for (const other of [settingsPane, guidePane]) {
+    const q = await other($, 'desktop')
+    // The settings pane names the switch ("Hero cards"); no pane draws a card.
+    expect(await words(q)).not.toMatch(/class="hero/)
+    await q.unmount()
+  }
+})
+
+// The switch is kept in the mod's store under `heroCard`, not in the plugin's options
+// (contract-hero-card.md, "The switch").
+const heroButton = async (ui: Pick<Mounted, 'findAll'>) => (await ui.findAll({ type: 'Button' })).find(b => b.key === 'hero-card')
+const svgSources = async (ui: Pick<Mounted, 'findAll'>): Promise<string[]> => (await ui.findAll({ type: 'Svg' })).map(s => String(s.props.source))
+const runCrew = async ($: Engine, args: string): Promise<string> => String(((await $.command.run({ command: 'crew', args } as never)) as { text?: unknown })?.text)
+
+test('desktop: an option named heroCard is not read: the panel still draws its cards', { options: { heroCard: false } as never }, async ($, on) => {
+  await boot($, on)
+  await startTurn($)
+  const p = await pane($, 'desktop')
+  const panel = await words(p)
+  expect(panel).toContain('Claude')
+  expect(heroCards(panel)).toBeGreaterThan(0)
+  await p.unmount()
+})
+
+// What the store holds under `heroCard`: only `false` switches the cards off.
+for (const [label, value, drawn] of [
+  ['nothing', undefined, true],
+  ['true', true, true],
+  ['false', false, false],
+  ['the text "false"', 'false', true],
+  ['the text "off"', 'off', true],
+  ['0', 0, true],
+  ['null', null, true],
+  ['an object', { on: false }, true],
+] as const) {
+  test(`desktop: with ${label} stored under heroCard the panel draws ${drawn ? 'its hero cards' : 'none'}`, async ($, on) => {
+    await boot($, on, value === undefined ? {} : { stored: { heroCard: value } })
+    await startTurn($)
+    const p = await pane($, 'desktop')
+    const panel = await words(p)
+    expect(panel).toContain('Claude')
+    if (drawn) expect(heroCards(panel)).toBeGreaterThan(0)
+    else expect(panel).not.toMatch(/hero/)
+    await p.unmount()
+  })
+}
+
+test('/crew set heroCard writes the store, never an option, and redraws the panel with and without cards', async ($, on) => {
+  const { configs, writes, stored, clock } = await boot($, on)
+  await startTurn($)
+  const p = await pane($, 'desktop')
+  expect(heroCards(await words(p))).toBeGreaterThan(0)
+  // Let this load's mirror sync run first, so what the command writes stands alone.
+  await clock.settle()
+  const before = configs.length
+  // Today's answer to a boolean setting (setOption): `Set animations to false.`
+  expect(await runCrew($, 'set heroCard off')).toBe('Set heroCard to false.')
+  expect(stored.heroCard).toBe(false)
+  expect(writes.filter(w => w.key === 'heroCard').at(-1)?.value).toBe(false)
+  expect(await words(p)).not.toMatch(/hero/)
+  expect(await runCrew($, 'set HEROCARD on')).toBe('Set heroCard to true.')
+  expect(stored.heroCard).toBe(true)
+  expect(heroCards(await words(p))).toBeGreaterThan(0)
+  expect(await runCrew($, 'set heroCard no')).toBe('Set heroCard to false.')
+  expect(stored.heroCard).toBe(false)
+  expect(await runCrew($, 'set heroCard TRUE')).toBe('Set heroCard to true.')
+  expect(stored.heroCard).toBe(true)
+  await clock.settle()
+  // No option and no mirror is written for it.
+  expect(configs.slice(before)).toEqual([])
+  expect(configs.some(c => /hero/i.test(c.key))).toBe(false)
+  // A bad value is refused as a bad boolean is today (`Cannot set animations to "maybe". Usage: ...`), and nothing is written.
+  const stores = writes.length
+  for (const bad of ['maybe', '2', 'offf']) {
+    const today = await runCrew($, `set animations ${bad}`)
+    expect(today).toMatch(/^Cannot set animations to /)
+    expect(await runCrew($, `set heroCard ${bad}`)).toBe(today.replace('animations', 'heroCard'))
+  }
+  expect(writes.length).toBe(stores)
+  expect(configs.slice(before)).toEqual([])
+  expect(stored.heroCard).toBe(true)
+  expect(heroCards(await words(p))).toBeGreaterThan(0)
+  await p.unmount()
+})
+
+test('the /crew usage text lists heroCard among the keys of /crew set', async ($, on) => {
+  await boot($, on)
+  const text = await runCrew($, 'set nope 1')
+  const keys = /\/crew set <key> <value> \(([^)]*)\)/.exec(text)?.[1]?.split(', ') ?? []
+  expect(keys).toContain('animations')
+  expect(keys).toContain('heroCard')
+})
+
+test('/crew reset after heroCard was switched off puts it on again and stores it so', async ($, on) => {
+  const { stored, clock } = await boot($, on)
+  await startTurn($)
+  const p = await pane($, 'desktop')
+  expect(await runCrew($, 'set heroCard off')).toBe('Set heroCard to false.')
+  expect(await words(p)).not.toMatch(/hero/)
+  expect(await runCrew($, 'reset')).toBe('Resetting the crew settings to their defaults.')
+  expect(stored.heroCard).toBe(true)
+  await clock.advance(1_000)
+  await clock.settle()
+  expect(heroCards(await words(p))).toBeGreaterThan(0)
+  await p.unmount()
+})
+
+test('/crew reset with heroCard stored off from an earlier load puts it on again and stores it so', async ($, on) => {
+  const { stored, clock } = await boot($, on, { stored: { heroCard: false } })
+  await startTurn($)
+  const p = await pane($, 'desktop')
+  expect(await words(p)).not.toMatch(/hero/)
+  expect(await runCrew($, 'reset')).toBe('Resetting the crew settings to their defaults.')
+  expect(stored.heroCard).toBe(true)
+  await clock.advance(1_000)
+  await clock.settle()
+  expect(heroCards(await words(p))).toBeGreaterThan(0)
+  const sp = await settingsPane($, 'desktop')
+  expect((await heroButton(sp))?.props.label).toBe('On')
+  await sp.unmount()
+  await p.unmount()
+})
+
+for (const surface of SURFACES) {
+  test(`${surface}: the settings pane's Look part: a heading, a muted line and the Hero cards row with its one button`, async ($, on) => {
+    await boot($, on)
+    const sp = await settingsPane($, surface)
+    const texts = await sp.findAll({ type: 'Text' })
+    const shown = texts.map(t => t.text)
+    const look = shown.indexOf('Look')
+    // After the last stepper (`Log lines` and its value), before "Bar items order".
+    expect(look).toBeGreaterThan(shown.indexOf('Log lines'))
+    expect(shown.slice(look, look + 4)).toEqual(['Look', 'A glass card behind each mascot in the panel.', 'Hero cards', 'Bar items order'])
+    expect(texts[look]?.props).toMatchObject({ size: 'heading', weight: 'semibold' })
+    expect(texts[look + 1]?.props).toMatchObject({ dimColor: true })
+    // The name sits in the steppers' name column.
+    const all = await tree(sp)
+    const textOf = (n: Node): string => (n.children ?? []).filter((c): c is string => typeof c === 'string').join('')
+    const column = (name: string) => all.find(x => x.node.type === 'Text' && textOf(x.node) === name)?.parent?.props?.width
+    expect(column('Panel text')).toBeDefined()
+    expect(column('Hero cards')).toBe(column('Panel text'))
+    // One button, keyed `hero-card`, reading On while the cards are drawn.
+    expect((await sp.findAll({ type: 'Button' })).filter(b => b.key === 'hero-card')).toHaveLength(1)
+    expect((await heroButton(sp))?.props.label).toBe('On')
+    // The last line stays.
+    expect(shown.at(-1)).toBe('Everything else is under Customize > Plugins > CPixelCrew.')
+    await sp.unmount()
+  })
+
+  test(`${surface}: a press of the Hero cards button flips it, stores it at once, and the pane and the panel follow`, async ($, on) => {
+    const { configs, writes, stored, clock } = await boot($, on)
+    await startTurn($)
+    const p = surface === 'desktop' ? await pane($, surface) : null
+    if (p) expect(heroCards(await words(p))).toBeGreaterThan(0)
+    const sp = await settingsPane($, surface)
+    await clock.settle()
+    const before = configs.length
+    await sp.press({ key: 'hero-card' })
+    expect(stored.heroCard).toBe(false)
+    expect(writes.filter(w => w.key === 'heroCard').at(-1)?.value).toBe(false)
+    expect((await heroButton(sp))?.props.label).toBe('Off')
+    if (p) expect(await words(p)).not.toMatch(/hero/)
+    // Twice is back where it started.
+    await sp.press({ key: 'hero-card' })
+    expect(stored.heroCard).toBe(true)
+    expect(writes.filter(w => w.key === 'heroCard').at(-1)?.value).toBe(true)
+    expect((await heroButton(sp))?.props.label).toBe('On')
+    if (p) expect(heroCards(await words(p))).toBeGreaterThan(0)
+    await clock.settle()
+    // No option and no mirror is written.
+    expect(configs.slice(before)).toEqual([])
+    await sp.unmount()
+    if (p) await p.unmount()
+  })
+
+  test(`${surface}: with heroCard stored off the button reads Off and a press turns the cards on`, async ($, on) => {
+    const { stored } = await boot($, on, { stored: { heroCard: false } })
+    const sp = await settingsPane($, surface)
+    expect((await heroButton(sp))?.props.label).toBe('Off')
+    await sp.press({ key: 'hero-card' })
+    expect(stored.heroCard).toBe(true)
+    expect((await heroButton(sp))?.props.label).toBe('On')
+    await sp.unmount()
+  })
+
+  test(`${surface}: when the store refuses the Hero cards press, a toast says so and nothing changes`, async ($, on) => {
+    const { stored, toasts, writes } = await boot($, on, { storeDeny: { heroCard: 'disk full' } })
+    await startTurn($)
+    const p = surface === 'desktop' ? await pane($, surface) : null
+    const sp = await settingsPane($, surface)
+    await sp.press({ key: 'hero-card' })
+    // Today's toast for a size the store refuses (stepSize): `Could not set textSize: <why>`.
+    expect(toasts.at(-1)).toMatch(/^Could not set heroCard: /)
+    expect(toasts.at(-1)).toContain('disk full')
+    expect('heroCard' in stored).toBe(false)
+    expect(writes.some(w => w.key === 'heroCard')).toBe(false)
+    expect((await heroButton(sp))?.props.label).toBe('On')
+    if (p) expect(heroCards(await words(p))).toBeGreaterThan(0)
+    // A second press is refused the same way and still changes nothing.
+    await sp.press({ key: 'hero-card' })
+    expect(toasts.filter(t => t.startsWith('Could not set heroCard: '))).toHaveLength(2)
+    expect((await heroButton(sp))?.props.label).toBe('On')
+    await sp.unmount()
+    if (p) await p.unmount()
+  })
+}
+
+test('desktop: off, on, off through the Hero cards button gives the first panel drawing back each time', { options: { animations: false } }, async ($, on) => {
+  await boot($, on, { stored: { heroCard: false } })
+  await startTurn($)
+  const p = await pane($, 'desktop')
+  const sp = await settingsPane($, 'desktop')
+  const off = await svgSources(p)
+  expect(off.join('\n')).not.toMatch(/hero/)
+  await sp.press({ key: 'hero-card' })
+  const carded = await svgSources(p)
+  expect(heroCards(carded.join('\n'))).toBeGreaterThan(0)
+  expect(carded).not.toEqual(off)
+  await sp.press({ key: 'hero-card' })
+  expect(await svgSources(p)).toEqual(off)
+  await sp.press({ key: 'hero-card' })
+  expect(await svgSources(p)).toEqual(carded)
+  await sp.press({ key: 'hero-card' })
+  expect(await svgSources(p)).toEqual(off)
+  await sp.unmount()
   await p.unmount()
 })
 

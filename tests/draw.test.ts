@@ -36,7 +36,7 @@ import type { CardData, Ctx, Drawing, IconName, PillData, PillIcon, PillItem, Pi
 import { FALLBACK_RATES, FLOW_ACCENT, FLOW_DONE, OTHER_HUES, PALETTES, agentColor, blankMain, blankRetired, blankUsage, contextGauge, fmtTokens, gaugeOf, retire, shiftColor, tabularWidth, textWidth, totals, usageSplit } from '../hooks/model'
 import type { Gauge, Planned, TaskState } from '../hooks/model'
 import * as draw from '../hooks/draw'
-import { sprite } from '../hooks/sprites'
+import { sprite, spriteCss, spriteDoc } from '../hooks/sprites'
 import type { Pose } from '../hooks/sprites'
 
 const NOW = Date.parse('2026-11-13T12:00:00Z') // a Friday
@@ -68,6 +68,8 @@ const SETTINGS: Settings = {
   autoOpen: 'plan',
   logLines: 15,
   barTooltips: true,
+  // Off, so the tests above see the rows as they were before the hero card; its own tests turn it on.
+  heroCard: false,
 }
 const settingsOf = (o: Partial<Settings> = {}): Settings => ({ ...SETTINGS, ...o })
 const ctxOf = (W: number, o: Partial<Settings> = {}, enterAgeMs?: number): Ctx => ({ W, now: NOW, settings: settingsOf(o), rates, ...(enterAgeMs === undefined ? {} : { enterAgeMs }) })
@@ -1777,5 +1779,357 @@ describe('work kinds in the rows', () => {
     expect(other.alt).toContain('for Helper')
     expect(other.source).toContain('low')
     expect(OTHER_HUES.some(c => other.source.includes(c))).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The hero card (contract-hero-card.md): a glass card with a pixel frame behind the mascot
+// of each of the panel's five row drawings, behind `heroCard`. Off, or with no settings, a
+// row is what it was before the card.
+
+describe('the hero card behind each mascot', () => {
+  const HERO_F = 'M2 1H32V2H33V30H32V31H2V30H1V2H2Z'
+  const HERO_R = 'M1 0H33V1H34V31H33V32H1V31H0V1H1ZM2 1H32V2H33V30H32V31H2V30H1V2H2Z'
+  const HERO_INNER = `<path class="hero-f" d="${HERO_F}"/><path class="hero-r" fill-rule="evenodd" d="${HERO_R}"/>`
+  const HERO_LIGHT = '.hero-f{fill:#1F1E1D;fill-opacity:.05}.hero-r{fill:#1F1E1D;fill-opacity:.3}'
+  const HERO_DARK = '@media (prefers-color-scheme: dark){.hero-f{fill:#F4F1E8;fill-opacity:.3}.hero-r{fill:#F4F1E8;fill-opacity:.62}}'
+  // The scale each row gives its mascot at 100% (MAIN_SCALE, ROW_SCALE, COMPACT_SCALE), and the padding its layout uses (MAIN_PAD, PAD).
+  const ROW = {
+    main: { k: 2.4, pad: 9, compact: false },
+    agent: { k: 1.1, pad: 10, compact: false },
+    planned: { k: 1.1, pad: 10, compact: false },
+    'compact main': { k: 0.8, pad: 0, compact: true },
+    'compact agent': { k: 0.8, pad: 0, compact: true },
+  } as const
+  type RowName = keyof typeof ROW
+  const ROWS = Object.keys(ROW) as RowName[]
+  // A finished agent with one line of title and meta and nothing doing: a row no taller than its mascot at 200%.
+  const shortRun = (): AgentRun => run({ status: 'done', description: 'Fix', model: '', stepTotal: 0, stepDone: 0, stepNote: '', doing: '', endedAt: NOW - 30_000 })
+  const rowOf = (what: RowName | 'agent short', c: Ctx): Drawing => {
+    switch (what) {
+      case 'main':
+        return mainDrawing(c, fullMain(), 2, blankUsage(NOW - HOUR), flow)
+      case 'agent':
+        return agentDrawing(c, run())
+      case 'agent short':
+        return agentDrawing(c, shortRun())
+      case 'planned':
+        return plannedDrawing(c, planned)
+      case 'compact main':
+        return compactMainDrawing(c, fullMain(), flow, 2)
+      case 'compact agent':
+        return compactAgentDrawing(c, run())
+    }
+  }
+  const on = (W: number, o: Partial<Settings> = {}): Ctx => ctxOf(W, { ...o, heroCard: true })
+  const off = (W: number, o: Partial<Settings> = {}): Ctx => ctxOf(W, { ...o, heroCard: false })
+  const bare = (W: number): Ctx => ({ W, now: NOW, rates }) as unknown as Ctx
+
+  // The whole element that opens at `at`, its nested groups included.
+  const element = (src: string, at: number): string => {
+    const re = /<(\/?)g\b[^>]*?(\/?)>/g
+    re.lastIndex = at
+    let depth = 0
+    for (let m = re.exec(src); m; m = re.exec(src)) {
+      if (m[2]) continue
+      depth += m[1] ? -1 : 1
+      if (depth === 0) return src.slice(at, re.lastIndex)
+    }
+    return src.slice(at)
+  }
+  // The mascot's placed group, as sprite() writes it.
+  const MASCOT = /<g transform="translate\(([-\d.]+),([-\d.]+)\) scale\(([\d.]+)\)"(?: opacity="0\.45")?><g class="(?:ct|cw) /
+  const mascotOf = (src: string): { x: number; y: number; k: number; at: number } | null => {
+    const m = MASCOT.exec(src)
+    return m ? { x: Number(m[1]), y: Number(m[2]), k: Number(m[3]), at: m.index } : null
+  }
+  type Card = { at: number; attrs: Record<string, string>; inner: string; whole: string; x: number; y: number; k: number }
+  const cardsOf = (src: string): Card[] =>
+    [...src.matchAll(/<g class="hero"(?=[\s>])[^>]*>/g)].map(m => {
+      const whole = element(src, m.index ?? 0)
+      const attrs = Object.fromEntries([...m[0].matchAll(/([\w:-]+)="([^"]*)"/g)].map(a => [a[1] ?? '', a[2] ?? '']))
+      const t = /^translate\(([-\d.]+),([-\d.]+)\) scale\(([\d.]+)\)$/.exec(attrs.transform ?? '')
+      return { at: m.index ?? 0, attrs, inner: whole.slice(m[0].length, -'</g>'.length), whole, x: Number(t?.[1]), y: Number(t?.[2]), k: Number(t?.[3]) }
+    })
+  const styles = (src: string): string => [...src.matchAll(/<style>([\s\S]*?)<\/style>/g)].map(m => m[1]).join('\n')
+  const count = (src: string, s: string): number => src.split(s).length - 1
+  const firstText = (src: string): { x: number; y: number } => {
+    const m = /<text x="([\d.-]+)" y="([\d.-]+)"/.exec(src)
+    return { x: Number(m?.[1]), y: Number(m?.[2]) }
+  }
+  const near = (a: number, b: number): boolean => Math.abs(a - b) < 0.006
+  const r2 = (v: number): number => Math.round(v * 100) / 100
+
+  // Where the contract puts the card in a row drawing of height H, where its text column
+  // starts, and how tall a compact row is.
+  const expected = (what: RowName, W: number, iconSize: number, H: number): { cx: number; cy: number; k: number; textX: number; compactH?: number } => {
+    const row = ROW[what]
+    const k = r2((row.k * iconSize) / 100)
+    const cw = 30 * k + 4 * k
+    const ch = 28 * k + 4 * k
+    if (row.compact) {
+      const h = Math.max(30, Math.ceil(ch + 6))
+      return { cx: 0, cy: Math.round((h - ch) / 2), k, textX: Math.round(cw + 8), compactH: h }
+    }
+    const x0 = Math.round(cw + 10)
+    const col = W - 2 - x0
+    if (col >= 150) return { cx: 0, cy: Math.round(Math.min((H - ch) / 2, row.pad + 2)), k, textX: x0 }
+    return { cx: 0, cy: 6, k, textX: col >= 90 ? x0 : 0 }
+  }
+  const cardMarkup = (x: number, y: number, k: number, dim = false): string =>
+    `<g class="hero" transform="translate(${r2(x)},${r2(y)}) scale(${r2(k)})"${dim ? ' opacity="0.45"' : ''}>${HERO_INNER}</g>`
+
+  // A drawing with its sprite markup and sprite CSS taken out (another job redraws the cat),
+  // the mascot kept as its place and scale, so the pins below hold whatever the art is.
+  const shape = (src: string, theme: ThemeName): string => {
+    let out = src.split(spriteCss(theme)).join('{sprite css}')
+    const m = MASCOT.exec(out)
+    if (m) out = out.replace(element(out, m.index), `{mascot ${m[1]} ${m[2]} ${m[3]}}`)
+    return out
+  }
+  // FNV-1a, 32 bits, as hex: a fingerprint of a drawing's shape.
+  const fnv = (s: string): string => {
+    let h = 0x811c9dc5
+    for (let i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i)
+      h = Math.imul(h, 0x01000193) >>> 0
+    }
+    return h.toString(16).padStart(8, '0')
+  }
+  const print = (d: Drawing, theme: ThemeName = 'clawd'): string => {
+    const s = shape(d.source, theme)
+    return `H ${d.height} len ${s.length} ${fnv(s)}`
+  }
+
+  // "Today": read from hooks/draw.ts as it was before the card (2.3.0, 2026-11-24), clawd theme,
+  // this file's fixtures, at mascots 100% unless said. Each row is pinned with heroCard off,
+  // then drawn with no settings at all. W 480 is beside the text, 170 (200 for the main row)
+  // the stacked layout, 100 the mascot alone on top; a compact row has one layout.
+  const TODAY: [RowName | 'agent short', number, number, string, string][] = [
+    ['main', 480, 100, 'H 127 len 2353 ca2df3f9', 'H 127 len 2353 aa4e4cf9'],
+    ['main', 200, 100, 'H 160 len 2328 30b65dbb', 'H 160 len 2328 a7cd100f'],
+    ['main', 100, 100, 'H 268 len 2475 7865cd89', 'H 268 len 2475 bef7e66d'],
+    ['agent', 480, 100, 'H 98 len 1619 fc4fce9c', 'H 98 len 1619 2e9a3cff'],
+    ['agent', 170, 100, 'H 152 len 1821 eddd63b6', 'H 152 len 1821 0ee0231f'],
+    ['agent', 100, 100, 'H 193 len 1876 75ec356e', 'H 193 len 1876 80641c9d'],
+    ['planned', 480, 100, 'H 52 len 1334 68d5951a', 'H 52 len 1334 68d5951a'],
+    ['planned', 170, 100, 'H 90 len 1470 d4b6a06a', 'H 90 len 1470 d4b6a06a'],
+    ['planned', 100, 100, 'H 117 len 1465 afc64e41', 'H 117 len 1465 afc64e41'],
+    ['compact main', 480, 100, 'H 30 len 1255 c2ae2864', 'H 30 len 1255 c2ae2864'],
+    ['compact main', 100, 100, 'H 30 len 1110 926ee769', 'H 30 len 1110 926ee769'],
+    ['compact agent', 480, 100, 'H 30 len 1330 8ac6e252', 'H 30 len 1330 8ac6e252'],
+    ['compact agent', 100, 100, 'H 30 len 1170 3189b0d4', 'H 30 len 1170 3189b0d4'],
+    // The worked example's rows at mascots 200%: 74 tall with text at 76; 51 tall with text at 56.
+    ['agent short', 480, 200, 'H 74 len 1330 e3482748', ''],
+    ['compact agent', 480, 200, 'H 51 len 1336 3227b900', ''],
+  ]
+
+  test('off, or with no settings, each row is what it was before the card (today, pinned)', async () => {
+    for (const [what, W, iconSize, withOff, withNone] of TODAY) {
+      expect(`${what} ${W} ${iconSize}%: ${print(rowOf(what, off(W, { iconSize })))}`).toBe(`${what} ${W} ${iconSize}%: ${withOff}`)
+      if (withNone) expect(`${what} ${W} no settings: ${print(rowOf(what, bare(W)))}`).toBe(`${what} ${W} no settings: ${withNone}`)
+    }
+    // The mascot where it was: on whole pixels, at the row's own place; the text where it was.
+    expect(shape(agentDrawing(off(480, { iconSize: 200 }), shortRun()).source, 'clawd')).toContain('{mascot 0 6 2.2}')
+    expect(firstText(agentDrawing(off(480, { iconSize: 200 }), shortRun()).source).x).toBe(76)
+    expect(shape(compactAgentDrawing(off(480, { iconSize: 200 }), run()).source, 'clawd')).toContain('{mascot 0 3 1.6}')
+    expect(firstText(compactAgentDrawing(off(480, { iconSize: 200 }), run()).source).x).toBe(56)
+  })
+
+  test('off, or with no settings, no row holds anything named hero, in either theme, at any width or size', async () => {
+    for (const theme of THEMES)
+      for (const W of [100, 120, 170, 200, 240, 480, 1000])
+        for (const iconSize of [50, 100, 200, 250])
+          for (const what of [...ROWS, 'agent short' as const])
+            for (const [how, c] of [
+              ['off', off(W, { theme, iconSize })],
+              ['no settings', bare(W)],
+            ] as const) {
+              const d = rowOf(what, c)
+              expect(/hero/.test(d.source) ? `${what} ${theme} W=${W} ${iconSize}% ${how}: holds hero` : 'ok').toBe('ok')
+            }
+  })
+
+  test('on: each of the five rows holds one card, its two paths as given, before the mascot, the mascot 2K inside it', async () => {
+    for (const theme of THEMES)
+      for (const W of [100, 170, 200, 480, 1000])
+        for (const iconSize of [100, 200])
+          for (const what of ROWS) {
+            const label = `${what} ${theme} W=${W} ${iconSize}%`
+            const d = rowOf(what, on(W, { theme, iconSize }))
+            check(d, label)
+            const cards = cardsOf(d.source)
+            expect(cards.length, `${label}: cards`).toBe(1)
+            expect(count(d.source, 'class="hero"'), `${label}: class hero`).toBe(1)
+            const card = cards[0]
+            if (!card) continue
+            expect(card.inner, `${label}: the card's paths`).toBe(HERO_INNER)
+            // class and transform, and opacity on a planned row only: nothing else on the group.
+            expect(Object.keys(card.attrs).sort(), `${label}: the card's attributes`).toEqual(what === 'planned' ? ['class', 'opacity', 'transform'] : ['class', 'transform'])
+            if (what === 'planned') expect(card.attrs.opacity, label).toBe('0.45')
+            const e = expected(what, W, iconSize, d.height)
+            expect([card.x, card.y, card.k], `${label}: the card's place`).toEqual([r2(e.cx), r2(e.cy), e.k])
+            expect(card.attrs.transform, label).toBe(`translate(${r2(e.cx)},${r2(e.cy)}) scale(${e.k})`)
+            if (e.compactH !== undefined) expect(d.height, `${label}: compact height`).toBe(e.compactH)
+            const m = mascotOf(d.source)
+            expect(m === null ? `${label}: no mascot` : 'ok').toBe('ok')
+            if (!m) continue
+            expect(card.at < m.at ? 'ok' : `${label}: the card comes after the mascot`).toBe('ok')
+            expect(m.k, `${label}: mascot scale`).toBe(e.k)
+            expect(near(m.x, card.x + 2 * e.k) && near(m.y, card.y + 2 * e.k) ? 'ok' : `${label}: mascot at (${m.x}, ${m.y}), card at (${card.x}, ${card.y}), K ${e.k}`).toBe('ok')
+            // The card does not move with the mascot: it is not inside the mascot's group.
+            expect(element(d.source, m.at).includes('hero') ? `${label}: card inside the mascot` : 'ok').toBe('ok')
+          }
+  })
+
+  test("on: the card's colours are in the drawing's style block, once, and the card has no gradient, filter, stroke or animation", async () => {
+    for (const theme of THEMES)
+      for (const what of ROWS) {
+        const d = rowOf(what, on(480, { theme }))
+        const css = styles(d.source)
+        expect(css.includes(HERO_LIGHT) ? 'ok' : `${what} ${theme}: no light rules`).toBe('ok')
+        expect(css.includes(HERO_DARK) ? 'ok' : `${what} ${theme}: no dark rules`).toBe('ok')
+        expect(count(d.source, HERO_LIGHT), what).toBe(1)
+        expect(count(d.source, HERO_DARK), what).toBe(1)
+        // The only rules that name the card are those two.
+        const rest = css.split(HERO_LIGHT).join('').split(HERO_DARK).join('')
+        expect(/hero/.test(rest) ? `${what} ${theme}: another rule names the card` : 'ok').toBe('ok')
+        const card = cardsOf(d.source)[0]?.whole ?? ''
+        expect(/gradient|filter|stroke|shadow|animat/i.test(card) ? `${what}: decorated card` : 'ok').toBe('ok')
+      }
+  })
+
+  test('on: both themes get the same card', async () => {
+    for (const W of [100, 170, 480])
+      for (const iconSize of [100, 200])
+        for (const what of ROWS) {
+          const [clawd, cat] = THEMES.map(theme => cardsOf(rowOf(what, on(W, { theme, iconSize })).source)[0]?.whole)
+          expect(clawd === undefined ? `${what}: no card` : 'ok').toBe('ok')
+          expect(cat, `${what} W=${W} ${iconSize}%`).toBe(clawd)
+        }
+  })
+
+  test('on: the worked example at mascots 200%: an agent row and a compact row', async () => {
+    // Agent row: K 2.2, card 74.8 x 70.4; text at round(84.8) = 85, H = ceil(70.4 + 12) = 83,
+    // card at (0, round(min((83 - 70.4) / 2, 12))) = (0, 6), mascot at (4.4, 10.4).
+    const a = agentDrawing(on(480, { iconSize: 200 }), shortRun())
+    expect(a.height).toBe(83)
+    expect(firstText(a.source).x).toBe(85)
+    expect(cardsOf(a.source)[0]?.whole).toBe(`<g class="hero" transform="translate(0,6) scale(2.2)">${HERO_INNER}</g>`)
+    const am = mascotOf(a.source)
+    expect(am !== null && near(am.x, 4.4) && near(am.y, 10.4) && am.k === 2.2).toBe(true)
+    // Compact row: K 1.6, card 54.4 x 51.2; H = max(30, ceil(57.2)) = 58, text at round(62.4) = 62,
+    // card at (0, round(3.4)) = (0, 3), mascot at (3.2, 6.2).
+    for (const d of [compactAgentDrawing(on(480, { iconSize: 200 }), run()), compactMainDrawing(on(480, { iconSize: 200 }), fullMain(), flow, 2)]) {
+      expect(d.height).toBe(58)
+      expect(firstText(d.source).x).toBe(62)
+      expect(cardsOf(d.source)[0]?.whole).toBe(`<g class="hero" transform="translate(0,3) scale(1.6)">${HERO_INNER}</g>`)
+      const m = mascotOf(d.source)
+      expect(m !== null && near(m.x, 3.2) && near(m.y, 6.2) && m.k === 1.6).toBe(true)
+    }
+  })
+
+  test('on: the layouts at mascots 100%, from the formulas: beside the text, stacked, alone, compact', async () => {
+    const cardIn = (d: Drawing): string | undefined => cardsOf(d.source)[0]?.whole
+    const mascotAt = (d: Drawing, x: number, y: number): boolean => {
+      const m = mascotOf(d.source)
+      return m !== null && near(m.x, x) && near(m.y, y)
+    }
+    // Beside the text (W 480). Agent: K 1.1, card 37.4 x 35.2, text at round(47.4) = 47 (43 off);
+    // its text (71) is taller than ceil(35.2 + 12), so H stays 71; cy = round(min(17.9, 12)) = 12.
+    const agent = agentDrawing(on(480), shortRun())
+    expect(agent.height).toBe(agentDrawing(off(480), shortRun()).height)
+    expect(agent.height).toBe(71)
+    expect(firstText(agent.source).x).toBe(47)
+    expect(cardIn(agent)).toBe(cardMarkup(0, 12, 1.1))
+    expect(mascotAt(agent, 2.2, 14.2)).toBe(true)
+    // Main: K 2.4, card 81.6 x 76.8, text at round(91.6) = 92 (82 off), H 127 as off; cy = round(min(25.1, 11)) = 11.
+    const main = mainDrawing(on(480), fullMain(), 2, blankUsage(NOW - HOUR), flow)
+    expect(main.height).toBe(127)
+    expect(firstText(main.source).x).toBe(92)
+    expect(cardIn(main)).toBe(cardMarkup(0, 11, 2.4))
+    expect(mascotAt(main, 4.8, 15.8)).toBe(true)
+    // Planned: H 52 as off; cy = round(min((52 - 35.2) / 2, 12)) = round(8.4) = 8; the card dimmed as its mascot.
+    const plan = plannedDrawing(on(480), planned)
+    expect(plan.height).toBe(52)
+    expect(firstText(plan.source).x).toBe(47)
+    expect(cardIn(plan)).toBe(cardMarkup(0, 8, 1.1, true))
+    expect(mascotAt(plan, 2.2, 10.2)).toBe(true)
+
+    // Stacked (W 170): card at (0, 6), mascot at (2.2, 8.2), the title beside it at 47. The
+    // top part is text-bound (pad 10 + 35 against 6 + 35.2), so the row keeps its 77.
+    const stacked = agentDrawing(on(170), shortRun())
+    expect(stacked.height).toBe(agentDrawing(off(170), shortRun()).height)
+    expect(stacked.height).toBe(77)
+    expect(firstText(stacked.source).x).toBe(47)
+    expect(cardIn(stacked)).toBe(cardMarkup(0, 6, 1.1))
+    expect(mascotAt(stacked, 2.2, 8.2)).toBe(true)
+    // Stacked and mascot-bound (W 200, 200%): the top part is ceil(6 + 70.4 + 6) = 83 against
+    // ceil(6 + 61.6 + 6) = 74 off, so the row is 9 taller; text at 85, mascot at (4.4, 10.4).
+    const tall = agentDrawing(on(200, { iconSize: 200 }), shortRun())
+    expect(tall.height - agentDrawing(off(200, { iconSize: 200 }), shortRun()).height).toBe(9)
+    expect(firstText(tall.source).x).toBe(85)
+    expect(cardIn(tall)).toBe(cardMarkup(0, 6, 2.2))
+    expect(mascotAt(tall, 4.4, 10.4)).toBe(true)
+
+    // Alone (W 100): the text starts at ceil(6 + 35.2 + 6) = 48, not 43: the first baseline
+    // moves from 57 to 62 and the row is 5 taller; card at (0, 6), mascot at (2.2, 8.2).
+    const alone = agentDrawing(on(100), shortRun())
+    const aloneOff = agentDrawing(off(100), shortRun())
+    expect(firstText(alone.source)).toEqual({ x: 0, y: 62 })
+    expect(firstText(aloneOff.source)).toEqual({ x: 0, y: 57 })
+    expect(alone.height - aloneOff.height).toBe(5)
+    expect(cardIn(alone)).toBe(cardMarkup(0, 6, 1.1))
+    expect(mascotAt(alone, 2.2, 8.2)).toBe(true)
+    // The main row alone (W 120): ceil(6 + 76.8 + 6) = 89 against 80, 9 taller; mascot at (4.8, 10.8).
+    const mainAlone = mainDrawing(on(120), fullMain(), 2, blankUsage(NOW - HOUR), flow)
+    const mainAloneOff = mainDrawing(off(120), fullMain(), 2, blankUsage(NOW - HOUR), flow)
+    expect(mainAlone.height - mainAloneOff.height).toBe(9)
+    expect(firstText(mainAlone.source).y - firstText(mainAloneOff.source).y).toBe(9)
+    expect(cardIn(mainAlone)).toBe(cardMarkup(0, 6, 2.4))
+    expect(mascotAt(mainAlone, 4.8, 10.8)).toBe(true)
+
+    // Compact (K 0.8, card 27.2 x 25.6): H = max(30, ceil(31.6)) = 32, not 30; text at
+    // round(35.2) = 35, not 32; card at (0, round(3.2)) = (0, 3), mascot at (1.6, 4.6).
+    const pairs: [Drawing, Drawing][] = [
+      [compactAgentDrawing(on(480), run()), compactAgentDrawing(off(480), run())],
+      [compactMainDrawing(on(480), fullMain(), flow, 2), compactMainDrawing(off(480), fullMain(), flow, 2)],
+    ]
+    for (const [d, was] of pairs) {
+      expect([d.height, was.height]).toEqual([32, 30])
+      expect([firstText(d.source).x, firstText(was.source).x]).toEqual([35, 32])
+      expect(cardIn(d)).toBe(cardMarkup(0, 3, 0.8))
+      expect(mascotAt(d, 1.6, 4.6)).toBe(true)
+    }
+  })
+
+  test('off, on, off again: the row comes back as it was', async () => {
+    for (const theme of THEMES)
+      for (const W of [100, 170, 480])
+        for (const what of ROWS) {
+          const c = off(W, { theme, iconSize: 200 })
+          const first = rowOf(what, c).source
+          const lit = rowOf(what, { ...c, settings: { ...c.settings, heroCard: true } }).source
+          const again = rowOf(what, { ...c, settings: { ...c.settings, heroCard: false } }).source
+          expect(lit === first ? `${what} ${theme} W=${W}: on draws the same as off` : 'ok').toBe('ok')
+          expect(again === first ? 'ok' : `${what} ${theme} W=${W}: off again differs`).toBe('ok')
+          expect(rowOf(what, c).source === first ? 'ok' : `${what}: the first settings changed`).toBe('ok')
+        }
+  })
+
+  test('on: the bar above the prompt and spriteDoc draw no card', async () => {
+    for (const theme of THEMES) {
+      const s = settingsOf({ theme, heroCard: true })
+      for (const W of [240, 480, 700])
+        for (const state of STATES) {
+          const bar = collapsedDrawing({ W, now: NOW, flow, state, usage: fullUsage(), main: fullMain(), settings: s, agentsRunning: 2 })
+          expect(/hero/.test(bar.source) ? `collapsed ${theme} ${W} ${state}` : 'ok').toBe('ok')
+          for (const f of [flow, null]) {
+            const p = progressDrawing(f, W, s, state, 3, 2)
+            expect(/hero/.test(p.source) ? `progress ${theme} ${W} ${state}` : 'ok').toBe('ok')
+          }
+        }
+      for (const pose of ['work', 'wait', 'rest', 'done', 'planned'] as Pose[]) expect(/hero/.test(spriteDoc({ theme, role: 'main', pose }))).toBe(false)
+    }
   })
 })

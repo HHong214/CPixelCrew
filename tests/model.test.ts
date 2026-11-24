@@ -836,6 +836,7 @@ describe('settings', () => {
       palette: 'ocean',
       barColors: 'kind',
       background: 'plain',
+      heroCard: true,
       animations: true,
       textSize: 100,
       iconSize: 200,
@@ -1173,6 +1174,96 @@ describe('settings', () => {
     expect(setSetting(s, 'animations', '')).toBeNull()
   })
 
+  // The hero card's switch (contract-hero-card.md, "The switch"): a setting kept in the mod's
+  // store, not a plugin option. normalizeSettings passes a settings object's own value through,
+  // as it passes a size through: `false` stays `false`, anything else is `true`.
+  test('heroCard: on by default; normalizeSettings keeps false and reads anything else as on', async () => {
+    expect(DEFAULT_SETTINGS.heroCard).toBe(true)
+    expect(normalizeSettings({}).heroCard).toBe(true)
+    expect(normalizeSettings(undefined).heroCard).toBe(true)
+    expect(normalizeSettings('junk').heroCard).toBe(true)
+    // A stored settings object from before the card has no key: it reads as on.
+    const { heroCard: _gone, ...before } = DEFAULT_SETTINGS
+    expect(normalizeSettings({ ...before, heroCard: undefined }).heroCard).toBe(true)
+    expect(normalizeSettings(before).heroCard).toBe(true)
+    expect(normalizeSettings({ heroCard: false }).heroCard).toBe(false)
+    expect(normalizeSettings({ heroCard: true }).heroCard).toBe(true)
+    // Only exactly `false` is off: text and numbers are not booleans.
+    for (const v of ['false', 'FALSE', 'off', 'no', 0, '', 'maybe', null, [], {}, NaN]) expect(normalizeSettings({ heroCard: v }).heroCard, String(v)).toBe(true)
+    // One switch does not move the other.
+    expect(normalizeSettings({ heroCard: false })).toEqual({ ...normalizeSettings({}), heroCard: false })
+    expect(normalizeSettings({ animations: false }).heroCard).toBe(true)
+    expect(normalizeSettings({ ...DEFAULT_SETTINGS, heroCard: false, animations: true }).animations).toBe(true)
+    // It survives JSON, as state holds it.
+    const s: Settings = { ...DEFAULT_SETTINGS, heroCard: false }
+    expect(normalizeSettings(JSON.parse(JSON.stringify(s)))).toEqual(s)
+  })
+
+  test('setSetting: heroCard takes on/off/true/false/yes/no, any case, and nothing else', async () => {
+    const s = DEFAULT_SETTINGS
+    expect(setSetting(s, 'heroCard', 'off')).toEqual({ ...s, heroCard: false })
+    expect(setSetting(s, 'HeroCard', 'NO')?.heroCard).toBe(false)
+    expect(setSetting(s, ' herocard ', 'false')?.heroCard).toBe(false)
+    expect(setSetting({ ...s, heroCard: false }, 'heroCard', 'on')).toEqual({ ...s, heroCard: true })
+    expect(setSetting({ ...s, heroCard: false }, 'heroCard', 'Yes')?.heroCard).toBe(true)
+    expect(setSetting({ ...s, heroCard: false }, 'heroCard', 'true')?.heroCard).toBe(true)
+    expect(setSetting(s, 'heroCard', 'maybe')).toBeNull()
+    expect(setSetting(s, 'heroCard', '')).toBeNull()
+    for (const v of ['on', 'off', 'TRUE', 'false', 'yes', 'NO', 'maybe', '', '1', '0']) {
+      const hero = setSetting({ ...s, animations: true }, 'heroCard', v)
+      const anim = setSetting({ ...s, animations: true }, 'animations', v)
+      expect(hero === null, v).toBe(anim === null)
+      if (hero && anim) expect(hero.heroCard, v).toBe(anim.animations)
+      // Only the one switch changes.
+      if (hero) expect({ ...hero, heroCard: s.heroCard }).toEqual(s)
+    }
+  })
+
+  test('heroCard is no plugin option: in no option list, never listed by changedOptions', async () => {
+    expect(OPTION_KEYS).not.toContain('heroCard')
+    expect(SETTING_OPTION_KEYS).not.toContain('heroCard')
+    expect(MIRROR_KEYS).not.toContain('heroCard')
+    expect('heroCard' in OPTION_DEFAULTS).toBe(false)
+    expect('heroCard' in OPTION_CHOICES).toBe(false)
+    expect(optionKey('heroCard')).toBeUndefined()
+    expect(optionKey('HEROCARD')).toBeUndefined()
+    // changedOptions never lists it, alone or beside a real option.
+    expect(changedOptions(DEFAULT_SETTINGS, { ...DEFAULT_SETTINGS, heroCard: false })).toEqual([])
+    expect(changedOptions({ ...DEFAULT_SETTINGS, heroCard: false }, DEFAULT_SETTINGS)).toEqual([])
+    expect(changedOptions(DEFAULT_SETTINGS, { ...DEFAULT_SETTINGS, background: 'grid', heroCard: false, animations: false })).toEqual([
+      { key: 'background', value: 'grid' },
+      { key: 'animations', value: false },
+    ])
+    for (const before of [DEFAULT_SETTINGS, { ...DEFAULT_SETTINGS, heroCard: false }])
+      for (const after of [DEFAULT_SETTINGS, { ...DEFAULT_SETTINGS, heroCard: false }, { ...DEFAULT_SETTINGS, theme: 'clawd' as const, heroCard: !before.heroCard }])
+        for (const c of changedOptions(before, after)) expect(c.key).not.toBe('heroCard')
+  })
+
+  test('settingsFromOptions: heroCard comes from the fourth argument only; false only for exactly false', async () => {
+    // The stored value decides.
+    expect(settingsFromOptions(OPTION_DEFAULTS, DEFAULT_SIZES, DEFAULT_BAR_ORDER, false)).toEqual({ ...DEFAULT_SETTINGS, heroCard: false })
+    expect(settingsFromOptions(OPTION_DEFAULTS, DEFAULT_SIZES, DEFAULT_BAR_ORDER, true)).toEqual(DEFAULT_SETTINGS)
+    expect(settingsFromOptions(undefined, undefined, undefined, false).heroCard).toBe(false)
+    // Nothing stored, or anything that is not exactly false, is on.
+    for (const v of [undefined, null, true, 'false', 'off', 'no', 0, '', 'maybe', [], {}, NaN]) expect(settingsFromOptions(OPTION_DEFAULTS, DEFAULT_SIZES, DEFAULT_BAR_ORDER, v).heroCard, String(v)).toBe(true)
+    // Whatever the options hold under heroCard is ignored, both ways.
+    for (const v of [false, 'false', 'off', true, 'on', 'maybe']) {
+      expect(settingsFromOptions({ ...OPTION_DEFAULTS, heroCard: v }).heroCard, String(v)).toBe(true)
+      expect(settingsFromOptions({ ...OPTION_DEFAULTS, heroCard: v }, DEFAULT_SIZES, DEFAULT_BAR_ORDER).heroCard, String(v)).toBe(true)
+      expect(settingsFromOptions({ ...OPTION_DEFAULTS, heroCard: v }, DEFAULT_SIZES, DEFAULT_BAR_ORDER, true).heroCard, String(v)).toBe(true)
+      expect(settingsFromOptions({ ...OPTION_DEFAULTS, heroCard: v }, DEFAULT_SIZES, DEFAULT_BAR_ORDER, false).heroCard, String(v)).toBe(false)
+    }
+    // Three-argument (and shorter) calls give on.
+    expect(settingsFromOptions(OPTION_DEFAULTS, DEFAULT_SIZES, DEFAULT_BAR_ORDER).heroCard).toBe(true)
+    expect(settingsFromOptions(OPTION_DEFAULTS, DEFAULT_SIZES).heroCard).toBe(true)
+    expect(settingsFromOptions(OPTION_DEFAULTS).heroCard).toBe(true)
+    // The fourth argument moves nothing else.
+    const sizes = { textSize: 130, iconSize: 120, barSize: 140, logLines: 30 }
+    const order = [...DEFAULT_BAR_ORDER].reverse()
+    const opts = { ...OPTION_DEFAULTS, theme: 'clawd', animations: false }
+    expect(settingsFromOptions(opts, sizes, order, false)).toEqual({ ...settingsFromOptions(opts, sizes, order), heroCard: false })
+  })
+
   test('toggleBarItem switches one item off, or on in its own place', async () => {
     const on = toggleBarItem(SIX_ON, 'time')
     expect(on.barItems).toEqual([...SIX, 'time'])
@@ -1273,8 +1364,8 @@ describe('options', () => {
     expect(SETTING_OPTION_KEYS).toEqual(SETTING_ORDER)
     expect(SETTING_OPTION_KEYS).toHaveLength(18)
     expect(MIRROR_KEYS).toEqual(MIRRORS)
-    // Every setting is an option, but barItems (the eight booleans) and the four sizes (in the store).
-    expect([...SETTING_OPTION_KEYS.filter(k => !BAR_KEYS.includes(k)), 'barItems', ...SIZE_KEYS].sort()).toEqual(Object.keys(DEFAULT_SETTINGS).sort())
+    // Every setting is an option, but barItems (the eight booleans), the four sizes and heroCard (in the store).
+    expect([...SETTING_OPTION_KEYS.filter(k => !BAR_KEYS.includes(k)), 'barItems', ...SIZE_KEYS, 'heroCard'].sort()).toEqual(Object.keys(DEFAULT_SETTINGS).sort())
     for (const gone of ['guide', 'tooltips', 'barItems', 'rateSource', 'customRate', 'textSize', 'iconSize', 'barSize', 'logLines', 'resetAll']) expect(OPTION_KEYS).not.toContain(gone)
     expect('resetAll' in OPTION_DEFAULTS).toBe(false)
   })
@@ -2414,6 +2505,7 @@ test('settings survive a JSON round trip unchanged', async () => {
     barSize: 80,
     barItems: ['fiveHour', 'turn', 'time'],
     logLines: 99,
+    heroCard: false,
     animations: false,
     barTooltips: false,
   }
