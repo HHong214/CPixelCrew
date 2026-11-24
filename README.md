@@ -313,6 +313,12 @@ The plugin's version is pinned, so an update is seen only when the version in `.
 
 Then run `/reload-plugins`.
 
+## Licence
+
+MIT: see [LICENSE](LICENSE). It does not cover the crab mascot of the `clawd` theme, which is Claude Code's and belongs to Anthropic, and the ported code keeps its own authors' notices, which `LICENSE` repeats.
+
+CPixelCrew is not affiliated with or endorsed by Anthropic. Claude is a trademark of Anthropic.
+
 ## Credits
 
 The progress bar, the crab mascot art and parts of the panel are ported from the savvy-progress and session-band plugins in claude-kit by johnnyvizz (MIT licence). The activity line (what an agent is doing, in a few words) follows whats-agent-doing by Tzafrir Rehan (MIT licence). See `LICENSE` for the notices.
