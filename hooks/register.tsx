@@ -1603,7 +1603,7 @@ async function onAgentTool($: EngineInterface, e: Parameters<AgentToolHook>[1], 
     // Clipped as onAgentSpawn and the stored titles are, so a long planned title still matches.
     const description = clip(printable(String((e as { description?: unknown }).description ?? '')), MAX_DESCRIPTION)
     const plan = await read($, flowState)
-    if (plan && !plan.isFinished && wantsSteps(type, description, plan)) {
+    if (plan && !plan.isFinished && (isLegacyCrewType(type) || isPlanned(plan, description))) {
       await update($, flowState, prev => {
         if (!prev || prev.isFinished) return prev
         return { ...prev, running: prev.running + 1, phase: prev.phase === 'plan' ? 'delegate' : prev.phase }
