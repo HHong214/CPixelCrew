@@ -1,5 +1,5 @@
 {
-  "name": "crew-local",
-  "owner": { "name": "local" },
-  "plugins": [{ "name": "pixel-crew", "source": "./" }]
+  "name": "cpixelcrew",
+  "owner": { "name": "HHong214" },
+  "plugins": [{ "name": "CPixelCrew", "source": "./" }]
 }

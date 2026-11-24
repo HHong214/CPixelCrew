@@ -1,4 +1,4 @@
-// pixel-crew: every SVG the agents panel and the bar show. Pure: state, time and
+// CPixelCrew: every SVG the agents panel and the bar show. Pure: state, time and
 // settings arrive as parameters, and each function returns one whole document.
 
 import type { AgentRun, Flow, LogEntry, MainRun, Rates, Retired, Settings, ThemeName, Usage } from '../types'
@@ -108,7 +108,7 @@ const widthOf = (W: unknown): number => Math.round(clamp(fin(W, 320), 40, 4096))
 const pct = (v: number): string => `${Math.round(clamp(v, 0, 100))}%`
 const str = (v: unknown): string => (typeof v === 'string' ? printable(v) : '')
 // Alt text is one line, long enough to say what the drawing shows.
-const oneLine = (s: string): string => clip(printable(s), 300) || 'pixel-crew'
+const oneLine = (s: string): string => clip(printable(s), 300) || 'CPixelCrew'
 // Mascot size in the panel, as a factor.
 const iconK = (s: Settings | undefined): number => clamp(fin(s?.iconSize, 100), 50, 250) / 100
 

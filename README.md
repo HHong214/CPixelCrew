@@ -1,6 +1,6 @@
-# Pixel Crew
+<h1 align="center"><img src="docs/wordmark.svg" alt="CPixelCrew" width="330"></h1>
 
-Pixel Crew is a visual mod for Claude Code. It draws an agents panel, where every subagent appears as a pixel mascot dressed for the kind of work it does, and a bar above the prompt with progress and usage figures. It also adds a Crew settings pane, a short guide, the `/crew` command and two small tools the model uses to report progress. It has no skills and no agents of its own: it shows any subagent, whoever started it.
+CPixelCrew is a visual mod for Claude Code. It draws an agents panel, where every subagent appears as a pixel mascot dressed for the kind of work it does, and a bar above the prompt with progress and usage figures. It also adds a Crew settings pane, a short guide, the `/crew` command and two small tools the model uses to report progress. It has no skills and no agents of its own: it shows any subagent, whoever started it.
 
 To plan work and split it across subagents, use the companion plugin Session Router (`/session-router:route <task>`). The two work together, and each works without the other.
 
@@ -12,7 +12,7 @@ To plan work and split it across subagents, use the companion plugin Session Rou
 - The log icon at the right of any row in the panel opens that agent's log under the row.
 - `/crew guide`, or the help icon at the top of the panel, shows or hides a short guide to the commands and icons.
 
-**Change the look and the money.** Open Customize > Plugins > pixel-crew in the desktop app, or type `/crew set <key> <value>`:
+**Change the look and the money.** Open Customize > Plugins > CPixelCrew in the desktop app, or type `/crew set <key> <value>`:
 
 - Mascots: `/crew set theme cat` (black cat, the default) or `/crew set theme clawd` (crab).
 - Currency: `/crew set currency EUR`. Every cost is then shown in euros.
@@ -176,7 +176,7 @@ Three palettes colour the usage meters, the bar's pills and the model series of 
 
 Settings live in two places, and nothing is in both:
 
-- **The plugin screen:** Customize > Plugins > pixel-crew in the desktop app holds every choice and toggle, each choice listing its default first. A change takes effect at once: the mod reloads with the new value and everything redraws. It also has five shown-only fields, the four sizes and the exchange rate in use, written there by the mod; typing in them changes nothing, and the mod overwrites what was typed the next time it updates them.
+- **The plugin screen:** Customize > Plugins > CPixelCrew in the desktop app holds every choice and toggle, each choice listing its default first. A change takes effect at once: the mod reloads with the new value and everything redraws. It also has five shown-only fields, the four sizes and the exchange rate in use, written there by the mod; typing in them changes nothing, and the mod overwrites what was typed the next time it updates them.
 - **The Crew settings pane:** `/crew settings`, or the gear icon at the top of the agents panel, shows or hides it. It holds the four sizes, each with `−` / `+` buttons, then `Bar items order`, and a line pointing to the plugin screen for everything else. Both are kept in the mod's own store, not in the plugin's options; each press saves at once and redraws.
 
 | On the screen | Key | What it does | Values (default first) |
@@ -239,7 +239,7 @@ Each press stops at the ends of the range. A value off the step grid, typed with
 
 ## Tools it adds for the model
 
-**`mcp__pixel-crew__progress`.** The main session reports a plan. A call from a subagent is ignored. Fields left out keep their previous value.
+**`mcp__CPixelCrew__progress`.** The main session reports a plan. A call from a subagent is ignored. Fields left out keep their previous value.
 
 | Field | What it is |
 |---|---|
@@ -252,7 +252,7 @@ Each press stops at the ends of the range. A value off the step grid, typed with
 
 Each task's `title` must equal the Agent `description` the task is started with, so the panel can match runs to tasks. `kind` is one of the work kinds and sets the task's costume and colour (`agent` is still read as an older name for it, and may name a 1.6 role). `model` and `effort` are what the planned row shows. `after` lists the numbers of the tasks it waits for. When two tasks in one report have the same title (ignoring case and punctuation), the later ones get ` (2)`, ` (3)` added, and the tool's reply lists the titles to use as Agent descriptions. A re-run of a task reuses its title and counts for that task.
 
-**`mcp__pixel-crew__step`.** A subagent reports its own steps (`done`, `total`, `note`); it fills that agent's row bar and adds a line to its log. A call from the main session is ignored. The tool is in every agent's tool list, not behind a search.
+**`mcp__CPixelCrew__step`.** A subagent reports its own steps (`done`, `total`, `note`); it fills that agent's row bar and adds a line to its log. A call from the main session is ignored. The tool is in every agent's tool list, not behind a search.
 
 When a subagent starts, the mod adds a line to the end of its brief asking it to report steps with `step`, unless the brief already names the tool. It does this for a `session-router:` agent (or a 1.6 `pixel-crew:` one), and for an agent whose description matches a planned task, unless it is one of Claude Code's own types (`web-fetch`, `Explore`, `Plan`, `claude-code-guide`, `statusline-setup`).
 
@@ -292,16 +292,26 @@ When a subagent starts, the mod adds a line to the end of its brief asking it to
 - Prices for Fable 5.2, Opus 5.5, Sonnet 5.5 and Haiku 5.5, with bare aliases read as the newest model.
 - Eleven bugs fixed; see `CHANGELOG.md`.
 
-## Install and update
+## Install
 
-The plugin folder is its own local marketplace: `.claude-plugin\marketplace.json` names the marketplace `crew-local` with this one plugin in it. Add the folder and install from it:
+CPixelCrew is installed from this repository, which is also its marketplace (`cpixelcrew`). Add the marketplace, install the plugin, then reload:
 
 ```
-claude plugin marketplace add <pixel-crew folder>
-claude plugin install pixel-crew@crew-local
+claude plugin marketplace add https://github.com/HHong214/CPixelCrew.git
+claude plugin install CPixelCrew@cpixelcrew
 ```
 
-After you edit files in the folder, run `/reload-plugins` (or start a new session) so Claude Code reads them again.
+Then run `/reload-plugins` (or start a new session) so Claude Code loads it.
+
+## Update
+
+The plugin's version is pinned, so an update is seen only when the version in `.claude-plugin/plugin.json` is raised. To fetch it:
+
+```
+/plugin marketplace update cpixelcrew
+```
+
+Then run `/reload-plugins`.
 
 ## Credits
 

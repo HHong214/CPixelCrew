@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.2.0
+
+### Changed
+
+- The mod is now called **CPixelCrew** (it was Pixel Crew), is published on GitHub at `HHong214/CPixelCrew` and is by HHong214. It is installed from there: see Install in the README.
+- The command `/crew` is unchanged, with all its sub-commands, and so are the Crew settings pane, the guide and the agents panel. Nothing is drawn differently.
+- The two tools other mods and plugins call have new names: `mcp__CPixelCrew__progress` and `mcp__CPixelCrew__step` (they were `mcp__pixel-crew__progress` and `mcp__pixel-crew__step`). Anything that names the old tools must be changed to the new names.
+- In the desktop app the mod's options are now under Customize > Plugins > CPixelCrew.
+
 ## 2.1.0
 
 ### Added

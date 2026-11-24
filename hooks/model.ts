@@ -1,4 +1,4 @@
-// pixel-crew: pure logic shared by the drawings and the wiring. No `$`, no
+// CPixelCrew: pure logic shared by the drawings and the wiring. No `$`, no
 // clock, no I/O: every input, time included, arrives as a parameter.
 
 import type {
@@ -27,7 +27,7 @@ import type {
   View,
 } from '../types'
 
-export const PLUGIN = 'pixel-crew'
+export const PLUGIN = 'CPixelCrew'
 
 // A finite number or nothing: tool input and stored state are not trusted.
 const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)

@@ -1,8 +1,8 @@
 {
-  "name": "pixel-crew",
-  "version": "2.1.0",
-  "description": "Pixel Crew: a visual mod, a live agents panel that draws every subagent as a themed pixel mascot dressed for the kind of work it does, and a combined progress and usage bar above the prompt. Pairs with Session Router, which plans the work and splits it across subagents.",
-  "author": { "name": "local" },
+  "name": "CPixelCrew",
+  "version": "2.2.0",
+  "description": "CPixelCrew: a visual mod, a live agents panel that draws every subagent as a themed pixel mascot dressed for the kind of work it does, and a combined progress and usage bar above the prompt. Pairs with Session Router, which plans the work and splits it across subagents.",
+  "author": { "name": "HHong214" },
   "license": "MIT",
   "types": "./types/index.d.ts",
   "keywords": ["subagents", "mod", "agents-panel", "statusline"],

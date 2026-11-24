@@ -1,4 +1,4 @@
-// pixel-crew: the wiring. Every call on `$` is in this file: the events the mod
+// CPixelCrew: the wiring. Every call on `$` is in this file: the events the mod
 // follows, the state they keep, the tools and command it adds, and the trees of
 // the agents panel, the settings and guide panes and the bar above the prompt. What
 // is drawn comes from draw.ts and what is reckoned from model.ts, so this file only
@@ -242,10 +242,10 @@ const APP_TOOL = 'get_usage'
 const APP_EVERY_MS = 5 * 60_000
 const APP_MAX_FAILS = 3
 const MAX_ERROR = 200
-const PROGRESS_TOOL = 'mcp__pixel-crew__progress'
-const STEP_TOOL = 'mcp__pixel-crew__step'
+const PROGRESS_TOOL = 'mcp__CPixelCrew__progress'
+const STEP_TOOL = 'mcp__CPixelCrew__step'
 // A `userConfig` field's row in the settings is `<plugin>.<field>`.
-const CONFIG_PREFIX = 'pixel-crew.'
+const CONFIG_PREFIX = 'CPixelCrew.'
 
 // Added to the end of a worker's brief (`wantsSteps`). A system prompt that words step
 // reporting as a condition gets skipped; the same request in the brief is followed.
@@ -320,17 +320,17 @@ const USAGE_TEXT =
 // State. Rates, the bar's collapsed flag and the sizes are also kept in `$.store`;
 // the other settings are the plugin's options and live in the engine's settings.
 
-const flowState = atom({ plugin: 'pixel-crew', key: 'flow' } as const, null)
+const flowState = atom({ plugin: 'CPixelCrew', key: 'flow' } as const, null)
 // The subagents of the run under way, or of the last one: what the bar counts with no plan on.
-const runState = atom({ plugin: 'pixel-crew', key: 'run' } as const, null)
-const agentsState = atom({ plugin: 'pixel-crew', key: 'agents' } as const, [])
+const runState = atom({ plugin: 'CPixelCrew', key: 'run' } as const, null)
+const agentsState = atom({ plugin: 'CPixelCrew', key: 'agents' } as const, [])
 // What the rows no longer listed had spent, so the session's totals never go down.
-const retiredState = atom({ plugin: 'pixel-crew', key: 'retired' } as const, blankRetired())
-const mainState = atom({ plugin: 'pixel-crew', key: 'main' } as const, blankMain(0))
-const usageState = atom({ plugin: 'pixel-crew', key: 'usage' } as const, blankUsage(0))
-const viewState = atom({ plugin: 'pixel-crew', key: 'view' } as const, blankView())
-const ratesState = atom({ plugin: 'pixel-crew', key: 'rates' } as const, { at: 0, rates: { ...FALLBACK_RATES }, isLive: false })
-const nowState = atom({ plugin: 'pixel-crew', key: 'now' } as const, 0)
+const retiredState = atom({ plugin: 'CPixelCrew', key: 'retired' } as const, blankRetired())
+const mainState = atom({ plugin: 'CPixelCrew', key: 'main' } as const, blankMain(0))
+const usageState = atom({ plugin: 'CPixelCrew', key: 'usage' } as const, blankUsage(0))
+const viewState = atom({ plugin: 'CPixelCrew', key: 'view' } as const, blankView())
+const ratesState = atom({ plugin: 'CPixelCrew', key: 'rates' } as const, { at: 0, rates: { ...FALLBACK_RATES }, isLive: false })
+const nowState = atom({ plugin: 'CPixelCrew', key: 'now' } as const, 0)
 
 // The options `register` was handed. A changed option loads the module again and runs
 // `register` with the new values, so a module variable always holds the current ones.
@@ -3036,11 +3036,11 @@ function settingsPane($: EngineInterface, ui: Kit, s: Settings, order: readonly 
         Bar items order
       </Text>
       <Text dimColor wrap="wrap">
-        {'The order of the items on the bar. Switch items on or off under Customize > Plugins > pixel-crew.'}
+        {'The order of the items on the bar. Switch items on or off under Customize > Plugins > CPixelCrew.'}
       </Text>
       {order.map(orderRow)}
       <Text dimColor wrap="wrap">
-        {'Everything else is under Customize > Plugins > pixel-crew.'}
+        {'Everything else is under Customize > Plugins > CPixelCrew.'}
       </Text>
     </Box>,
   )
@@ -3169,8 +3169,8 @@ export const register: Register = (on, options) => {
   on('classic.SessionStart', onClassicSessionStart)
   on('ui.close', { id: PANE }, onPaneClose)
   on('command.run', { command: 'crew' }, onCommand)
-  on('tool.call', { tool: 'mcp__pixel-crew__progress' }, onProgress)
-  on('tool.call', { tool: 'mcp__pixel-crew__step' }, onStep)
+  on('tool.call', { tool: 'mcp__CPixelCrew__progress' }, onProgress)
+  on('tool.call', { tool: 'mcp__CPixelCrew__step' }, onStep)
   on('tool.call', AGENT_TOOL_MATCH, onAgentTool)
   on('tool.call', onToolCall)
   on('classic.PermissionRequest', onPermissionRequest)
@@ -3216,7 +3216,7 @@ const GUIDE_MD = `## Run a plan
 
 ## Settings
 
-- The choices and toggles are in the desktop app under Customize > Plugins > pixel-crew.
+- The choices and toggles are in the desktop app under Customize > Plugins > CPixelCrew.
 - The sizes (panel text, mascots, bar, log lines) and the order of the bar's items are set in the Crew settings pane; that screen only shows the sizes.
 - To start over, type \`/crew reset\`.
 `

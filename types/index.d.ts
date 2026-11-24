@@ -1,4 +1,4 @@
-// pixel-crew: the state contract. Every value the mod keeps in `$.state` is
+// CPixelCrew: the state contract. Every value the mod keeps in `$.state` is
 // declared here; hooks/*.ts import their value types from this file.
 
 export type Phase = 'research' | 'ask' | 'plan' | 'design' | 'delegate' | 'review' | 'close'
@@ -243,7 +243,7 @@ export type CrewSettings = Settings
 
 declare module 'claude-code' {
   interface PluginState {
-    'pixel-crew': {
+    'CPixelCrew': {
       flow: Flow | null
       run: Run | null
       agents: AgentRun[]
