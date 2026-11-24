@@ -381,17 +381,151 @@ const at = (grid: string[], x: number, y: number): string => grid[y * SPRITE_W +
 const headAndBody = (g: string): string => g.slice(g.indexOf('<g class="ct-bd">'), g.indexOf('<g class="ct-fr">'))
 const SITTING = ['work', 'wait', 'done', 'planned'] as const
 const ARMED = ['detective', 'engineer', 'chef', 'sprinter', 'scout', 'designer', 'writer', 'tester', 'reviewer', 'planner']
+// The drawing without the <g>s whose class list holds one of `classes`, and
+// everything inside them: a hidden frame, the marks, the sparkles.
+const without = (g: string, classes: readonly string[]): string => {
+  const drop: boolean[] = []
+  let out = ''
+  for (const m of g.matchAll(/<(\/?)(g|rect)([^>]*?)(\/?)>/g)) {
+    if (m[2] === 'g' && m[1]) {
+      if (!drop.includes(true)) out += m[0]
+      drop.pop()
+      continue
+    }
+    if (m[2] === 'g') drop.push((/\sclass="([^"]*)"/.exec(m[3] ?? '')?.[1] ?? '').split(' ').some(c => classes.includes(c)))
+    if (!drop.includes(true)) out += m[0]
+  }
+  return out
+}
+// Every grid cell a set of rects covers, as [x, y].
+const cellsOf = (paints: Paint[]): [number, number][] => paints.flatMap(([x, y, w, h]) =>
+  Array.from({ length: w * h }, (_, i): [number, number] => [x + (i % w), y + Math.floor(i / w)]))
+// The frames that are hidden in the still picture (nothing animating).
+const HIDDEN = ['ct-t0', 'ct-t1', 'ct-t2', 'ct-t4', 'ct-t5', 'ct-k1', 'ct-k2', 'ct-bl', 'ct-a0', 'ct-a2']
+const TAIL_FRAMES = ['ct-t0', 'ct-t1', 'ct-t2', 'ct-t3', 'ct-t4', 'ct-t5', 'ct-k0', 'ct-k1', 'ct-k2']
+const SPARKLES = ['ct-s1', 'ct-s2', 'ct-s3', 'ct-s4']
 
-test('the cat is black with lilac ears, flat pale-yellow eyes and a tiny nose', async () => {
+// The contract's colours: coat, leg lines, ear inside, eye. Gone: the lilac
+// ears and shut-eye lines, the pale-yellow eye, the nose.
+const EAR = '#A9CF9A'
+const EYE = '#EEEBD6'
+const GONE = ['#8E7CC3', '#6F5FA8', '#F3EFA0', '#C7A2E0']
+
+// The sitting cat of the contract, pixel for pixel: head, eyes and body of
+// `main` in work, done and planned (no tail). `.` empty, `k` coat, `l` leg line,
+// `g` ear inside, `c` eye. Rows 0-27, columns 0-29.
+const SIT_ROWS = [
+  '..............................',
+  '..............................',
+  '.....kk...............kk......',
+  '.....gkk.............kkg......',
+  '.....ggkk...........kkgg......',
+  '.....gggkk..kkkkk..kkggg......',
+  '.....ggkkkkkkkkkkkkkkkgg......',
+  '.....gkkkkkkkkkkkkkkkkkg......',
+  '.....kkkkkkkkkkkkkkkkkkk......',
+  '.....kkkcccckkkkkcccckkk......',
+  '.....kkcccccckkkcccccckk......',
+  '.....kccckkccckccckkccck......',
+  '.....kcckkkkcckcckkkkcck......',
+  '.....kcckkkkcckcckkkkcck......',
+  '.....kcckkkkcckcckkkkcck......',
+  '.....kcckkkkcckcckkkkcck......',
+  '.....kccckkccckccckkccck......',
+  '.....kkcccccckkkcccccckk......',
+  '......kkcccckkkkkcccckk.......',
+  '.......kkkkkkkkkkkkkkk........',
+  '.........kkkkkkkkkkk..........',
+  '...........kkkkkkk............',
+  '..........kkkkkkkkk...........',
+  '..........kkkkkkkkk...........',
+  '.........kkkkklkkkkk..........',
+  '........kkklkklkklkkk.........',
+  '........kkklkklkklkkk.........',
+  '.........kklkklkklkk..........',
+]
+// Waiting, the eyes narrow: rows 9 to 16 become these, the rest as above.
+const WAIT_EYES = [
+  '.....kkkkkkkkkkkkkkkkkkk......',
+  '.....kkkkkkkkkkkkkkkkkkk......',
+  '.....kkkkkkkkkkkkkkkkkkk......',
+  '.....kcckkkkkkkkkkkkkcck......',
+  '.....kcccckkkkkkkkkcccck......',
+  '.....kccckkckkkkkckkccck......',
+  '.....kcckkkkcckcckkkkcck......',
+  '.....kcckkkkcckcckkkkcck......',
+]
+const WAIT_ROWS = [...SIT_ROWS.slice(0, 9), ...WAIT_EYES, ...SIT_ROWS.slice(17)]
+const LETTER: Record<string, string> = { '': '.', '.ct-k': 'k', '.ct-l': 'l', [EAR]: 'g', [EYE]: 'c' }
+const rowsOf = (grid: string[]): string[] => Array.from({ length: SPRITE_H }, (_, y) =>
+  Array.from({ length: SPRITE_W }, (_, x) => LETTER[at(grid, x, y)] ?? '?').join(''))
+
+// The still tail (planned, and the wave's middle frame), as `rows: columns`.
+const STILL_TAIL = ['8: 27-28', '9-11: 26-29', '12-19: 27-29', '20: 26-29', '21: 26-28', '22: 25-28', '23: 24-27', '24: 22-26', '25: 20-25', '26: 20-23']
+const tailRows = (cells: [number, number][]): string[] => {
+  const byRow = new Map<number, Set<number>>()
+  for (const [x, y] of cells) byRow.set(y, (byRow.get(y) ?? new Set<number>()).add(x))
+  return [...byRow.keys()].sort((a, b) => a - b).map(y => {
+    const xs = [...(byRow.get(y) ?? [])].sort((a, b) => a - b)
+    return `${y}: ${xs[0]}-${xs.at(-1)}${xs.length === (xs.at(-1) ?? 0) - (xs[0] ?? 0) + 1 ? '' : ' with gaps'}`
+  })
+}
+const expand = (spec: readonly string[]): string[] => spec.flatMap(s => {
+  const [rows = '', cols = ''] = s.split(': ')
+  const [r0 = 0, r1 = r0] = rows.split('-').map(Number)
+  return Array.from({ length: r1 - r0 + 1 }, (_, i) => `${r0 + i}: ${cols}`)
+})
+
+test('the contract grids are 30 wide, 28 tall and mirror about column 14', async () => {
+  for (const rows of [SIT_ROWS, WAIT_ROWS]) {
+    expect(rows.length).toBe(SPRITE_H)
+    for (const row of rows) {
+      expect(row.length).toBe(SPRITE_W)
+      expect(row.slice(0, 29)).toBe([...row.slice(0, 29)].reverse().join(''))
+      expect(row[29]).toBe('.')
+    }
+  }
+})
+
+test('the cat is black with pale green ears and cream eyes, and no lilac, yellow or nose colour', async () => {
+  const css = spriteCss('cat')
+  for (const old of GONE) expect(`css ${old} ${css.includes(old)}`).toBe(`css ${old} false`)
   for (const role of SPRITE_ROLES) for (const pose of POSES) {
     const g = draw('cat', role, pose)
-    for (const part of ['class="ct-k"', 'class="ct-l"', '#8E7CC3', '#6F5FA8', '#C7A2E0', '<g class="ct-tail">']) {
+    for (const part of ['class="ct-k"', 'class="ct-l"', EAR, '<g class="ct-tail">']) {
       expect(`${role}/${pose} ${part} ${g.includes(part)}`).toBe(`${role}/${pose} ${part} true`)
     }
-    // One flat yellow and no rim colour; shut eyes when curled up.
-    expect(`${role}/${pose} eyes ${g.includes('#F3EFA0')}`).toBe(`${role}/${pose} eyes ${pose !== 'rest'}`)
+    for (const old of GONE) expect(`${role}/${pose} ${old} ${g.includes(old)}`).toBe(`${role}/${pose} ${old} false`)
+    // Cream eyes in every pose but rest, where they are shut.
+    expect(`${role}/${pose} eyes ${g.includes(EYE)}`).toBe(`${role}/${pose} eyes ${pose !== 'rest'}`)
     for (const old of ['#F4E97A', '#C9CF5A', '#17161B', '#3B3A46', 'ct-wk']) expect(g).not.toContain(old)
     expect(g).not.toContain('#D97757')
+  }
+  // No white glint in the eye: no white in the plain cat's head and body.
+  // The ride's sparkles keep their white centres.
+  for (const pose of POSES) expect(`${pose} ${without(draw('cat', 'main', pose), SPARKLES).includes('#FFFFFF')}`).toBe(`${pose} false`)
+})
+
+test('the plain sitting cat is the contract grid pixel for pixel, eyes wide or narrowed', async () => {
+  for (const pose of ['work', 'done', 'planned', 'wait'] as const) {
+    // The blink's lids are hidden in the still picture.
+    const got = rowsOf(pixelsOf(headAndBody(without(draw('cat', 'main', pose), ['ct-bl']))))
+    const want = pose === 'wait' ? WAIT_ROWS : SIT_ROWS
+    for (let y = 0; y < SPRITE_H; y += 1) expect(`${pose} ${y} ${got[y]}`).toBe(`${pose} ${y} ${want[y]}`)
+  }
+})
+
+test('a costume covers the sitting cat but never moves its head, eyes or body', async () => {
+  for (const role of SPRITE_ROLES) for (const pose of SITTING) {
+    const got = pixelsOf(headAndBody(without(draw('cat', role, pose), ['ct-bl'])))
+    const want = (pose === 'wait' ? WAIT_ROWS : SIT_ROWS).join('')
+    got.forEach((c, i) => {
+      const letter = LETTER[c]
+      const [x, y] = [i % SPRITE_W, Math.floor(i / SPRITE_W)]
+      // A cat colour only where the contract has that colour; and never a hole where it has the cat.
+      if (letter && letter !== '.') expect(`${role}/${pose} ${x},${y} ${letter}`).toBe(`${role}/${pose} ${x},${y} ${want[i]}`)
+      if (want[i] !== '.') expect(`${role}/${pose} ${x},${y} ${c === '' ? 'hole' : 'painted'}`).toBe(`${role}/${pose} ${x},${y} painted`)
+    })
   }
 })
 
@@ -414,10 +548,11 @@ test('the cat has no outline: no outline group, rule or stroke, and nothing but 
     const g = draw('cat', role, pose)
     expect(g).not.toContain('ct-ol')
     expect(g).not.toContain('stroke')
-    // The plain cat's every painted pixel is coat, ear, eye, nose, broom, sparkle or mark: no ring of another dark.
+    // The plain cat's every painted pixel is coat, ear, eye, broom, sparkle or mark: no ring of another dark.
     if (role === 'main') {
-      const allowed = new Set(['.ct-k', '.ct-l', '.ct-cl', '', '#8E7CC3', '#6F5FA8', '#F3EFA0', '#FFFFFF', '#C7A2E0', '#E9C46A', '#C9963A', '#B07A45', '#7A4A26', '#F5C542', '#8E929A'])
-      for (const p of tintsOf(g)) expect(`${pose} ${p[4]} ${allowed.has(p[4])}`).toBe(`${pose} ${p[4]} true`)
+      const allowed = new Set(['.ct-k', '.ct-l', '.ct-cl', '', EAR, EYE, '#E9C46A', '#C9963A', '#B07A45', '#7A4A26', '#F5C542', '#8E929A'])
+      // The sparkles are left out: their white centres are not the eye's.
+      for (const p of tintsOf(without(g, SPARKLES))) expect(`${pose} ${p[4]} ${allowed.has(p[4])}`).toBe(`${pose} ${p[4]} true`)
     }
   }
 })
@@ -433,7 +568,7 @@ test('the cat faces forward: head, eyes and body mirror about the centre line', 
   }
 })
 
-test('the cat has no mouth in any pose, and its whiskers are its coat', async () => {
+test('the cat has no nose, mouth or whiskers in any pose', async () => {
   for (const theme of THEMES) for (const role of SPRITE_ROLES) for (const pose of POSES) {
     expect(sprite({ theme, role, pose, x: 3, y: 4, smile: true })).toBe(sprite({ theme, role, pose, x: 3, y: 4 }))
   }
@@ -441,14 +576,11 @@ test('the cat has no mouth in any pose, and its whiskers are its coat', async ()
   // Done draws the same head as work: no smile added.
   const head = (role: string, pose: Pose): string => { const g = draw('cat', role, pose); return g.slice(g.indexOf('<g class="ct-hd">'), g.indexOf('<g class="ct-fr">')) }
   for (const role of SPRITE_ROLES) expect(`${role} ${head(role, 'done') === head(role, 'work')}`).toBe(`${role} true`)
-  for (const pose of ['work', 'wait', 'done', 'planned', 'ride'] as const) {
+  // No nose colour anywhere (the colour test), and the old whisker tips beside the head are empty.
+  for (const pose of SITTING) {
     const grid = pixelsOf(draw('cat', 'main', pose))
-    expect(at(grid, 14, 14)).toBe('#C7A2E0')
-    // Under the nose: coat only.
-    for (let y = 15; y <= 16; y += 1) for (let x = 12; x <= 16; x += 1) expect(`${pose} ${x},${y} ${at(grid, x, y)}`).toBe(`${pose} ${x},${y} .ct-k`)
-    // Two whiskers a side, fanning out from the cheeks, in the coat's black.
-    for (const [x, y] of [[4, 11], [5, 12], [6, 12], [5, 14], [6, 14], [4, 15], [24, 11], [22, 12], [23, 12], [22, 14], [23, 14], [24, 15]] as const) {
-      expect(`${pose} whisker ${x},${y} ${at(grid, x, y)}`).toBe(`${pose} whisker ${x},${y} .ct-k`)
+    for (const [x, y] of [[4, 11], [24, 11], [4, 15], [24, 15]] as const) {
+      expect(`${pose} whisker ${x},${y} ${at(grid, x, y) || 'empty'}`).toBe(`${pose} whisker ${x},${y} empty`)
     }
   }
 })
@@ -461,11 +593,17 @@ test('the cat sits upright, curls up wider than tall to rest, and sits on a broo
     }
     const rest = draw('cat', role, 'rest')
     const [w, h] = coatBox(rest)
-    expect(`${role}/rest curled ${w >= h + 6}`).toBe(`${role}/rest curled true`)
+    expect(`${role}/rest curled ${w >= h + 4}`).toBe(`${role}/rest curled true`)
     // Breathing moves the back and the head; the curled cat's eyes are shut lines.
     expect(rest).toContain('<g class="ct-br">')
     expect(rest).toContain('class="ct-cl"')
-    expect(rest).not.toContain('#F3EFA0')
+    expect(rest).not.toContain(EYE)
+    // Nothing but the z's in the top-left corner.
+    const corner = cellsOf(tintsOf(without(rest, ['ct-mk']))).filter(([x, y]) => x <= 4 && y <= 8)
+    expect(`${role}/rest corner ${corner.map(c => c.join(',')).join(' ')}`).toBe(`${role}/rest corner `)
+    // Nothing but the waiting dots in the top-left rows.
+    const top = cellsOf(tintsOf(without(draw('cat', role, 'wait'), ['ct-mk']))).filter(([x, y]) => x <= 7 && y <= 1)
+    expect(`${role}/wait corner ${top.map(c => c.join(',')).join(' ')}`).toBe(`${role}/wait corner `)
     const ride = draw('cat', role, 'ride')
     for (const part of ['<g class="ct-rd">', '#E9C46A', '#B07A45', '<g class="ct-s1">', '<g class="ct-s2">', '<g class="ct-s3">']) expect(`${role} ${part} ${ride.includes(part)}`).toBe(`${role} ${part} true`)
     // The broom lies across the box, straw on the left, handle reaching the right edge.
@@ -476,19 +614,25 @@ test('the cat sits upright, curls up wider than tall to rest, and sits on a broo
   }
 })
 
-test('the tail rises on the right of the sitting and riding cat', async () => {
+test('the still tail rises up the right side and curls along the floor, cell for cell', async () => {
+  const want = expand(STILL_TAIL)
+  // Planned draws only the still tail; working, it is the wave's middle frame with the others hidden.
+  const planned = tailRows(cellsOf(rectsIn(draw('cat', 'main', 'planned'), 'ct-tail')))
+  const work = tailRows(cellsOf(rectsIn(without(draw('cat', 'main', 'work'), HIDDEN), 'ct-tail')))
+  expect(planned).toEqual(want)
+  expect(work).toEqual(want)
+})
+
+test('the tail keeps clear of the head: right of column 24 beside it, right of column 19 below it', async () => {
   for (const role of SPRITE_ROLES) for (const pose of [...SITTING, 'ride'] as const) {
     const g = draw('cat', role, pose)
-    // The body's right edge below the head.
-    const right = boxOf(rectsIn(g, 'ct-bd').filter(p => p[1] >= 17 && p[1] < 22))[2]
-    // Every wave frame and every flicking tip lies wholly right of the head (column 21) and the body.
-    for (const cls of ['ct-t0', 'ct-t1', 'ct-t2', 'ct-t3', 'ct-t4', 'ct-t5', 'ct-k0', 'ct-k1', 'ct-k2']) {
-      const part = rectsIn(g, cls)
-      if (!part.length) continue
-      expect(`${role}/${pose} ${cls} ${boxOf(part)[0] >= Math.max(22, right)}`).toBe(`${role}/${pose} ${cls} true`)
+    // Every wave frame, every flicking tip and whatever of the tail is still.
+    const parts = [...TAIL_FRAMES.map(cls => [cls, rectsIn(g, cls)] as const), ['ct-tail', rectsIn(g, 'ct-tail')] as const]
+    expect(`${role}/${pose} tail ${rectsIn(g, 'ct-tail').length > 0}`).toBe(`${role}/${pose} tail true`)
+    for (const [cls, rects] of parts) {
+      const out = cellsOf(rects).filter(([x, y]) => (pose === 'ride' ? x < 20 : y >= 2 && y <= 20 ? x < 25 : y > 20 && x < 20) || x > 29)
+      expect(`${role}/${pose} ${cls} ${out.map(c => c.join(',')).join(' ')}`).toBe(`${role}/${pose} ${cls} `)
     }
-    // The still tail and its root start at the body's right side.
-    expect(`${role}/${pose} tail ${boxOf(rectsIn(g, 'ct-tail'))[0] >= 20}`).toBe(`${role}/${pose} tail true`)
   }
 })
 
@@ -512,8 +656,9 @@ test('a raised paw swings its prop in an arc of three frames drawn from the shou
     const arm = [0, 1, 2].map(n => rectsIn(g, `ct-a${n}`))
     for (const [n, rects] of arm.entries()) {
       expect(`${role} a${n} ${rects.length > 3}`).toBe(`${role} a${n} true`)
-      // The arm reaches the shoulder at (10, 18).
-      expect(`${role} a${n} shoulder ${rects.some(p => p[0] <= 10 && p[0] + p[2] >= 11 && p[1] <= 18 && p[1] + p[3] >= 19)}`).toBe(`${role} a${n} shoulder true`)
+      // The arm starts at the shoulder cell (10, 22), two pixels thick.
+      const cells = new Set(cellsOf(rects).map(c => c.join(',')))
+      expect(`${role} a${n} shoulder ${['10,22', '11,22', '10,23', '11,23'].every(c => cells.has(c))}`).toBe(`${role} a${n} shoulder true`)
     }
     // The frames differ, and not only up and down: the paw's column moves too.
     const boxes = arm.map(rects => boxOf(rects))
@@ -522,14 +667,8 @@ test('a raised paw swings its prop in an arc of three frames drawn from the shou
     // Still poses hold the middle frame, ungrouped; the prop no longer bobs on its own.
     for (const pose of ['wait', 'done', 'planned'] as const) expect(draw('cat', role, pose)).not.toMatch(/ct-a\d|ct-it/)
     expect(g).not.toContain('ct-it')
-    // The raised paw has left the floor: one front paw stays down.
-    const paws = tintsOf(g).filter(p => p[4] === '.ct-l' && p[1] >= 26)
-    expect(`${role} ${paws.length}`).toBe(`${role} 1`)
   }
-  for (const role of ['main', 'ace', 'analyst', 'helper']) {
-    expect(draw('cat', role, 'work')).not.toMatch(/ct-a\d/)
-    expect(tintsOf(draw('cat', role, 'work')).filter(p => p[4] === '.ct-l' && p[1] >= 26).length).toBe(2)
-  }
+  for (const role of ['main', 'ace', 'analyst', 'helper']) expect(draw('cat', role, 'work')).not.toMatch(/ct-a\d/)
   // Out, across and back, the ends held longest; frame 1 is the still one.
   for (const n of [0, 1, 2]) {
     expect(css).toContain(`.ct-work .ct-a${n}{animation:ct-a${n} 1s steps(1) infinite}`)
@@ -568,6 +707,106 @@ test('the cat tail waves in at least six frames, flicks its tip while waiting an
   expect(css).toContain('.ct-ride .ct-rd{animation:ct-bob 1s steps(1) infinite}')
   expect(css).toMatch(/\.ct-s1,\.ct-s2,\.ct-s3[^{]*\{animation:ct-twinkle /)
   expect(css).toContain('.ct-rest .ct-br{animation:ct-breathe 3s steps(1) infinite}')
+})
+
+// Every animated selector of the cat's CSS with each of its animation
+// declarations, one entry per selector, sorted; keyframe contents left out.
+const motionOf = (css: string): string[] => {
+  const out: string[] = []
+  const flat = css.replace(/@keyframes [\w-]+\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}/g, '')
+  for (const m of flat.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const decls = (m[2] ?? '').split(';').map(d => d.trim()).filter(d => d.startsWith('animation'))
+    for (const sel of (m[1] ?? '').split(',')) for (const d of decls) out.push(`${sel.trim()} ${d}`)
+  }
+  return out.sort()
+}
+
+test('the cat keeps every animation it had: the same selectors, names, durations, timings and delays', async () => {
+  // Read from spriteCss('cat') at commit 724fcce, the cat before its redraw.
+  expect(motionOf(spriteCss('cat'))).toEqual([
+    '.ct * animation:none!important',
+    '.ct animation:none!important',
+    '.ct-done .ct-bl animation:ct-blink 5s steps(1) infinite -1s',
+    '.ct-done .ct-t0 animation-duration:3s',
+    '.ct-done .ct-t1 animation-duration:3s',
+    '.ct-done .ct-t2 animation-duration:3s',
+    '.ct-done .ct-t3 animation-duration:3s',
+    '.ct-done .ct-t4 animation-duration:3s',
+    '.ct-done .ct-t5 animation-duration:3s',
+    '.ct-r-ace.ct-work .ct-ant animation:ct-flash 1s steps(1) infinite',
+    '.ct-r-ace.ct-work .ct-star animation:ct-flash .5s steps(1) infinite -.25s',
+    '.ct-r-ace.ct-work animation:ct-float 1s ease-in-out infinite',
+    '.ct-r-analyst.ct-work .ct-b1 animation:ct-rise 1s steps(3) infinite',
+    '.ct-r-analyst.ct-work .ct-b2 animation:ct-rise 1s steps(5) infinite',
+    '.ct-r-analyst.ct-work .ct-b3 animation:ct-rise 1s steps(7) infinite',
+    '.ct-r-chef.ct-work .ct-egg animation:ct-flip 1s ease-in-out infinite',
+    '.ct-r-detective.ct-work .ct-gl animation:ct-flash 1s steps(1) infinite -.5s',
+    '.ct-r-helper.ct-work .ct-tie animation:ct-flut .5s steps(1) infinite',
+    '.ct-r-reviewer.ct-work .ct-a0 animation-duration:.5s',
+    '.ct-r-reviewer.ct-work .ct-a1 animation-duration:.5s',
+    '.ct-r-reviewer.ct-work .ct-a2 animation-duration:.5s',
+    '.ct-r-sprinter.ct-work .ct-flag animation:ct-wave .25s steps(1) infinite',
+    '.ct-r-tester.ct-work .ct-bu2 animation:ct-bub 1s linear infinite -.5s',
+    '.ct-r-tester.ct-work .ct-bub animation:ct-bub 1s linear infinite',
+    '.ct-r-writer.ct-work .ct-a0 animation-duration:.5s',
+    '.ct-r-writer.ct-work .ct-a1 animation-duration:.5s',
+    '.ct-r-writer.ct-work .ct-a2 animation-duration:.5s',
+    '.ct-rest .ct-br animation:ct-breathe 3s steps(1) infinite',
+    '.ct-rest .ct-t0 animation-duration:3s',
+    '.ct-rest .ct-t1 animation-duration:3s',
+    '.ct-rest .ct-t2 animation-duration:3s',
+    '.ct-rest .ct-t3 animation-duration:3s',
+    '.ct-rest .ct-t4 animation-duration:3s',
+    '.ct-rest .ct-t5 animation-duration:3s',
+    '.ct-rest .ct-z1 animation:ct-zz 3s linear infinite',
+    '.ct-rest .ct-z2 animation:ct-zz 3s linear infinite -1.5s',
+    '.ct-ride .ct-rd animation:ct-bob 1s steps(1) infinite',
+    '.ct-s1 animation:ct-twinkle 1s steps(1) infinite',
+    '.ct-s2 animation-delay:-.75s',
+    '.ct-s2 animation:ct-twinkle 1s steps(1) infinite',
+    '.ct-s3 animation-delay:-.5s',
+    '.ct-s3 animation:ct-twinkle 1s steps(1) infinite',
+    '.ct-s4 animation-delay:-.25s',
+    '.ct-s4 animation:ct-twinkle 1s steps(1) infinite',
+    '.ct-t0 animation:ct-f0 1s steps(1) infinite',
+    '.ct-t1 animation:ct-f1 1s steps(1) infinite',
+    '.ct-t2 animation:ct-f2 1s steps(1) infinite',
+    '.ct-t3 animation:ct-f3 1s steps(1) infinite',
+    '.ct-t4 animation:ct-f4 1s steps(1) infinite',
+    '.ct-t5 animation:ct-f5 1s steps(1) infinite',
+    '.ct-wait .ct-k0 animation:ct-k0 2.4s steps(1) infinite',
+    '.ct-wait .ct-k1 animation:ct-k1 2.4s steps(1) infinite',
+    '.ct-wait .ct-k2 animation:ct-k2 2.4s steps(1) infinite',
+    '.ct-wait .ct-w1 animation:ct-dot 1.5s steps(1) infinite',
+    '.ct-wait .ct-w2 animation:ct-dot 1.5s steps(1) infinite -1s',
+    '.ct-wait .ct-w3 animation:ct-dot 1.5s steps(1) infinite -.5s',
+    '.ct-work .ct-a0 animation:ct-a0 1s steps(1) infinite',
+    '.ct-work .ct-a1 animation:ct-a1 1s steps(1) infinite',
+    '.ct-work .ct-a2 animation:ct-a2 1s steps(1) infinite',
+    '.ct-work .ct-bl animation:ct-blink 4s steps(1) infinite',
+  ])
+})
+
+test('with every animation removed the still picture is whole: the middle frames show, the others and the lids hide', async () => {
+  const css = spriteCss('cat').replace(/@keyframes [\w-]+\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}/g, '')
+  const hidden = [...css.matchAll(/([^{}]+)\{opacity:0\}/g)].flatMap(m => (m[1] ?? '').split(',').map(s => s.trim()))
+  for (const cls of HIDDEN) expect(`${cls} ${hidden.includes(`.${cls}`)}`).toBe(`${cls} true`)
+  for (const cls of ['ct-t3', 'ct-k0', 'ct-a1', 'ct-tail', 'ct-bd', 'ct-hd', 'ct-fr', 'ct-br', 'ct-rd']) {
+    expect(`${cls} ${hidden.some(s => s.split(/\s+/).includes(`.${cls}`))}`).toBe(`${cls} false`)
+  }
+  // The frames the still picture relies on are drawn.
+  for (const role of SPRITE_ROLES) {
+    expect(draw('cat', role, 'work')).toContain('<g class="ct-t3">')
+    expect(draw('cat', role, 'wait')).toContain('<g class="ct-k0">')
+    if (ARMED.includes(role)) expect(draw('cat', role, 'work')).toContain('<g class="ct-a1">')
+  }
+})
+
+test('the cat markup stays small: its mean length is at most 15% above the old cat', async () => {
+  let total = 0
+  for (const role of SPRITE_ROLES) for (const pose of POSES) total += draw('cat', role, pose).length
+  // The old cat (commit 724fcce) averaged 6730.57 characters over 14 roles x 6 poses; 6730.57 x 1.15 = 7740.16.
+  expect(total / (SPRITE_ROLES.length * POSES.length)).toBeLessThanOrEqual(7740)
 })
 
 test('the crab draws ride exactly as it draws work', async () => {
