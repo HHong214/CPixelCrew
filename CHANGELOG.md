@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.4.0
+
+### Changed
+
+- The `cat` theme is redrawn as fan art of 罗小黑 (Luo Xiaohei), the cat of 罗小黑战记 (The Legend of Luo Xiaohei): a black cat with a big round head, two large round cream eyes with big black pupils, small upright ears with pale green insides, no nose, mouth or whiskers, no outline, a small body sitting upright and a tall tail that rises on its right. The eyes are wide when it works, is done, is planned or rides, narrow when it waits, and shut when it rests curled up asleep.
+- Every pose, motion and all fourteen costumes are kept, with the same timings: the broom ride, the z's, the waiting dots and the sparkles are as before. The theme is still called `cat`, is still the default, and no option changed.
+- The cat is drawn new for this mod, and the character belongs to its makers. The licence now says so and grants no rights in the character.
+
+### Added
+
+- Hero cards: in the agents panel, each mascot sits on a see-through glass card with a one-pixel pixel frame and notched corners, so a dark mascot shows on a dark page. They are on by default. The bar above the prompt has none.
+- Switch them with the Hero cards button (On or Off) in the Crew settings pane, which saves at once, or with `/crew set heroCard on` or `off`. `/crew reset` turns them back on.
+- Rows with a card are a little taller, and their text starts further right.
+
 ## 2.3.0
 
 ### Changed

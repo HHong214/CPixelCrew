@@ -16,7 +16,7 @@ The panel and the bar work with no orchestrator installed. Any orchestrator can 
 
 - Mascots: `/crew set theme cat` (black cat, the default) or `/crew set theme clawd` (crab).
 - Currency: `/crew set currency EUR`. Every cost is then shown in euros.
-- Sizes and the bar's order: `/crew settings`, or the gear icon at the top of the panel, opens the Crew settings pane; `/crew reset` puts everything back.
+- Sizes, hero cards and the bar's order: `/crew settings`, or the gear icon at the top of the panel, opens the Crew settings pane; `/crew reset` puts everything back.
 
 ## The agents panel
 
@@ -61,7 +61,9 @@ On the desktop the panel is a column of drawings over a backdrop of dots, a fine
 - a stats line: `in 1.2M · out 96k`, with the cache counted in `in`, then its estimated cost and elapsed time;
 - while it runs or waits, a thin bar of its reported steps, or of its context use in grey when it reports none.
 
-A running agent's dot and bar follow the `barColors` setting; the kind label always keeps the agent's own colour. A row grows taller to fit its text and a larger mascot (the Mascots size).
+A running agent's dot and bar follow the `barColors` setting; the kind label always keeps the agent's own colour. A row grows taller to fit its text and a larger mascot (the Mascots size). With hero cards on, it is a little taller still, and its text starts further right (see Hero cards).
+
+**Hero cards.** With `heroCard` on (the default), each mascot in the agents panel sits on a see-through glass card with a one-pixel pixel frame and notched corners, so a dark mascot shows on a dark page. The card is 34 x 32 mascot pixels round the 30 x 28 mascot; rows with a card are a little taller and their text starts further right. The bar above the prompt has no cards. Switch them with the Hero cards button in the Crew settings pane or with `/crew set heroCard on|off`.
 
 **Planned rows.** Tasks in the plan the bar shows that no agent has started yet: a dimmed mascot in the task's costume, the number and title (`5. Update README`), a clock mark, the kind label in the kind's colour, the planned model and effort (`Opus · high`) and `after 1, 2` when it waits for other tasks.
 
@@ -168,7 +170,7 @@ Collapsed, the bar is one line: the mascot's head, a short summary (`No task yet
 
 ## Themes
 
-Two themes draw the same layout: `cat` (the default), a slim black cat with a large round head, tall wide-set ears with lilac insides, large pale-yellow eyes with no rim, no mouth, black whiskers, a slim body sitting upright and facing forward, and a long thin tail that rises on its right and curls at the tip; and `clawd`, the pixel crab. The cat is one black in light and dark mode alike, with no outline and nothing behind it, so on a dark panel it reads mainly through its ears, eyes and costume. Working, it blinks now and then and moves its kind's prop with its paw in a small arc; waiting, it flicks the tip of its tail; resting, it lies curled up in a circle with its eyes shut, breathing, with z's drifting up; in the bar's progress row it rides a broom, bobbing, with sparkles off the bristles. Each kind wears the same costume in both themes (see Work kinds).
+Two themes draw the same layout: `cat` (the default), a black cat with a big round head, two large round cream eyes with big black pupils, small upright ears with pale green insides, no nose, mouth or whiskers, a small body sitting upright and a tall tail that rises on its right; and `clawd`, the pixel crab. The cat is fan art of 罗小黑 (Luo Xiaohei) from 罗小黑战记 (The Legend of Luo Xiaohei), drawn new for this mod; the character belongs to its makers (see [LICENSE](LICENSE)). The cat is one black in light and dark mode alike, with no outline and nothing behind it, so on a dark panel it reads mainly through its eyes, ears and costume, and the hero cards help (see Hero cards). Working, it keeps its eyes wide, blinks now and then and moves its kind's prop with its paw in a small arc; waiting, its eyes narrow and it flicks the tip of its tail; resting, it lies curled up asleep with its eyes shut, breathing, with z's drifting up; in the bar's progress row it rides a broom, bobbing, with sparkles off the bristles. Each kind wears the same costume in both themes (see Work kinds).
 
 Three palettes colour the usage meters, the bar's pills and the model series of the usage split: `ocean` (teal and blue, the default), `sunset` (orange and pink) and `classic` (green, amber, red). The progress tracks keep their own purple and green under every palette.
 
@@ -177,7 +179,7 @@ Three palettes colour the usage meters, the bar's pills and the model series of 
 Settings live in two places, and nothing is in both:
 
 - **The plugin screen:** Customize > Plugins > CPixelCrew in the desktop app holds every choice and toggle, each choice listing its default first. A change takes effect at once: the mod reloads with the new value and everything redraws. It also has five shown-only fields, the four sizes and the exchange rate in use, written there by the mod; typing in them changes nothing, and the mod overwrites what was typed the next time it updates them.
-- **The Crew settings pane:** `/crew settings`, or the gear icon at the top of the agents panel, shows or hides it. It holds the four sizes, each with `−` / `+` buttons, then `Bar items order`, and a line pointing to the plugin screen for everything else. Both are kept in the mod's own store, not in the plugin's options; each press saves at once and redraws.
+- **The Crew settings pane:** `/crew settings`, or the gear icon at the top of the agents panel, shows or hides it. It holds the four sizes, each with `−` / `+` buttons, then Look (the Hero cards button, which reads On or Off and flips with each press), then `Bar items order`, and a line pointing to the plugin screen for everything else. All three are kept in the mod's own store, not in the plugin's options; each press saves at once and redraws.
 
 | On the screen | Key | What it does | Values (default first) |
 |---|---|---|---|
@@ -218,13 +220,15 @@ The 1.6 values still work when typed: `/crew set barColors role` sets `kind`, an
 
 Each press stops at the ends of the range. A value off the step grid, typed with `/crew set`, first moves to the grid in the direction pressed: 105 goes up to 110 or down to 100.
 
+**Hero cards.** `heroCard` is a switch, on by default, kept in the mod's own store like the sizes and not a plugin option, so it is not in the table above. The Hero cards button in the Crew settings pane flips it and saves at once; `/crew set heroCard on|off` does the same. See Hero cards under The agents panel.
+
 **The bar order.** `Bar items order` lists the eight items in their current order, each with `▲` and `▼` buttons that move it one place; an item switched off on the plugin screen is listed muted. The default order is `context`, `5h`, `week`, `model`, `speed`, `cache`, `turn`, `time`. Which items show is still set by the plugin screen's toggles.
 
 **The exchange rate.** Costs are reckoned in US dollars and drawn in `currency` only. With `USD` there is no conversion. Otherwise the rate comes from the online table, which the mod fetches when a session starts if the stored table is more than a day old. Until a fetch succeeds, or when it fails, the last stored table is used, or a built-in table of rough rates when there is none or it lacks the currency. There is no rate of your own to enter. The shown-only exchange rate field says which is in use: `1 USD = 0.7551 GBP · online, 2026-11-14`, `… · built-in estimate`, or `US dollars, no conversion`.
 
-**From the chat.** `/crew set <key> <value>` takes every key in the settings table that is not shown-only, the four size keys, `barItems` and `barOrder`. A setting key writes the plugin option, as the plugin screen would; a size key writes the mod's store and updates the shown-only field. Examples: `/crew set palette sunset`, `/crew set barTurn off`, `/crew set textSize 120%`. Keys and values are not case-sensitive; on and off also take `true`/`false` and `yes`/`no`; a size outside its range is clamped. `/crew set barItems <list>` sets the eight toggles at once: `all`, `none`, or the names of the pills to show (`context`, `5h`, `week`, `model`, `speed`, `cache`, `turn`, `time`), separated by commas or spaces; the order typed does not count. `/crew set barOrder <list>` puts the items named first, in the order given, and the rest after them in their present order. A list with an unknown name, an unknown key or a bad value changes nothing and prints the usage text.
+**From the chat.** `/crew set <key> <value>` takes every key in the settings table that is not shown-only, the four size keys, `barItems`, `barOrder` and `heroCard`. A setting key writes the plugin option, as the plugin screen would; a size key writes the mod's store and updates the shown-only field; `heroCard` writes the store and redraws. Examples: `/crew set palette sunset`, `/crew set barTurn off`, `/crew set textSize 120%`. Keys and values are not case-sensitive; on and off also take `true`/`false` and `yes`/`no`; a size outside its range is clamped. `/crew set barItems <list>` sets the eight toggles at once: `all`, `none`, or the names of the pills to show (`context`, `5h`, `week`, `model`, `speed`, `cache`, `turn`, `time`), separated by commas or spaces; the order typed does not count. `/crew set barOrder <list>` puts the items named first, in the order given, and the rest after them in their present order. A list with an unknown name, an unknown key or a bad value changes nothing and prints the usage text.
 
-**Reset.** `/crew reset` puts every option back to its default and, at once, the four sizes and the bar order. The options go back one per reload, writing only those that differ; a flag in the mod's store carries the reset across the reloads, and it is cleared, and the shown-only fields updated, when no option differs any more.
+**Reset.** `/crew reset` puts every option back to its default and, at once, the four sizes, the bar order and the hero cards (on). The options go back one per reload, writing only those that differ; a flag in the mod's store carries the reset across the reloads, and it is cleared, and the shown-only fields updated, when no option differs any more.
 
 ## Commands
 
@@ -233,8 +237,8 @@ Each press stops at the ends of the range. A value off the step grid, typed with
 - `/crew bar` collapses or expands the bar.
 - `/crew settings` shows or hides the Crew settings pane.
 - `/crew guide` shows or hides the guide pane.
-- `/crew set <key> <value>` changes one setting or size, the bar's items (`barItems`) or their order (`barOrder`).
-- `/crew reset` puts every option, the sizes and the bar order back to their defaults.
+- `/crew set <key> <value>` changes one setting or size, the bar's items (`barItems`) or their order (`barOrder`), or the hero cards (`heroCard`).
+- `/crew reset` puts every option, the sizes, the bar order and the hero cards back to their defaults.
 - Any other word prints the usage text.
 
 ## Tools it adds for the model
@@ -315,7 +319,7 @@ Then run `/reload-plugins`.
 
 ## Licence
 
-MIT: see [LICENSE](LICENSE). It does not cover the crab mascot of the `clawd` theme, which is Claude Code's and belongs to Anthropic, and the ported code keeps its own authors' notices, which `LICENSE` repeats.
+MIT: see [LICENSE](LICENSE). It does not cover the crab mascot of the `clawd` theme, which is Claude Code's and belongs to Anthropic, nor the character drawn by the `cat` theme, fan art of 罗小黑 (Luo Xiaohei), which belongs to its makers; and the ported code keeps its own authors' notices, which `LICENSE` repeats.
 
 CPixelCrew is not affiliated with or endorsed by Anthropic. Claude is a trademark of Anthropic.
 
