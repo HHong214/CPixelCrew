@@ -11,7 +11,7 @@
 // bundled with esbuild into a temporary file first.
 
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -277,10 +277,39 @@ function checkIdentity(manifest, model) {
   return errors
 }
 
-const errors = [...check(manifest, model), ...checkIdentity(manifest, model)]
+// The mod stands on its own: nothing the engine loads names another mod. The mod's own
+// legacy `pixel-crew:<role>` types may stay. Every file under hooks/, types/ and
+// .claude-plugin/ is read, in any letter case.
+const OTHER_MOD = /session[ -]?router/i
+
+function filesUnder(dir) {
+  return readdirSync(join(root, dir), { withFileTypes: true }).flatMap(e => (e.isDirectory() ? filesUnder(`${dir}/${e.name}`) : [`${dir}/${e.name}`]))
+}
+
+function checkStandalone() {
+  const errors = []
+  for (const dir of ['hooks', 'types', '.claude-plugin']) {
+    let files
+    try {
+      files = filesUnder(dir)
+    } catch (e) {
+      errors.push(`standalone: cannot list ${dir}/: ${e.message}`)
+      continue
+    }
+    for (const f of files) {
+      const lines = readFileSync(join(root, f), 'utf8').split(/\r?\n/)
+      lines.forEach((line, i) => {
+        if (OTHER_MOD.test(line)) errors.push(`standalone: ${f}:${i + 1} names another mod; the mod must not name or depend on any other`)
+      })
+    }
+  }
+  return errors
+}
+
+const errors = [...check(manifest, model), ...checkIdentity(manifest, model), ...checkStandalone()]
 if (errors.length) {
-  console.error(`check-manifest: the manifest, the marketplace or the code disagrees with hooks/model.ts or the CPixelCrew name (${errors.length}):`)
+  console.error(`check-manifest: the manifest, the marketplace or the code disagrees with hooks/model.ts, the CPixelCrew name or the rule that no other mod is named (${errors.length}):`)
   for (const e of errors) console.error(`  ${e}`)
   process.exit(1)
 }
-console.log(`check-manifest: ok, ${Object.keys(manifest.userConfig).length} options match hooks/model.ts, and the name is ${NAME}`)
+console.log(`check-manifest: ok, ${Object.keys(manifest.userConfig).length} options match hooks/model.ts, the name is ${NAME}, and no other mod is named`)

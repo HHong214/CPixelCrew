@@ -298,7 +298,7 @@ describe('kinds', () => {
     // Nothing in the type: `other`.
     ['general-purpose', 'other'],
     ['statusline-setup', 'other'],
-    ['session-router:worker', 'other'],
+    ['some-router:worker', 'other'],
     ['other-plugin:ace', 'other'],
     ['', 'other'],
   ]

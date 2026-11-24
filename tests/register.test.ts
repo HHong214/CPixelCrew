@@ -644,7 +644,11 @@ for (const surface of SURFACES) {
     await boot($, on)
     const g = await guidePane($, surface)
     const md = String((await g.find({ type: 'Markdown' }))?.props.text ?? '')
-    for (const s of ['Run a plan', 'Commands', 'Panel and bar', '/session-router:route']) expect(md).toContain(s)
+    for (const s of ['Run a plan', 'Commands', 'Panel and bar']) expect(md).toContain(s)
+    // The guide names no other mod; it says that any orchestrator can report a plan through `progress`.
+    expect(md).not.toMatch(/session[ -]?router/i)
+    expect(md).not.toMatch(/companion plugin/i)
+    for (const s of ['orchestrator', '`progress`', 'panel']) expect(md).toContain(s)
     for (const gone of ['crew-flow', 'crew-delegate', 'crew-review']) expect(md).not.toContain(gone)
     for (const form of ['`/crew`', '/crew open', '/crew bar', '/crew settings', '/crew guide', '/crew set <key> <value>', '/crew reset']) expect(md).toContain(form)
     const lines = md.trim().split('\n').filter(l => l.trim())
@@ -1935,19 +1939,35 @@ test('progress takes tasks as { title, kind, model, effort, after } and agent as
   expect(await paneWords($, 'desktop')).toContain('Build agent, running: Build the panel')
 })
 
-test('the step line goes to routed workers and to agents on planned tasks, not to Claude Code types or unplanned agents', async ($, on) => {
+// A subagent type that once got the step line by its name alone. The name is put together
+// here so that no fixture spells out another mod; the code must give it no special treatment.
+const FORMER = `${['session', 'router'].join('-')}:worker`
+
+test('the step line goes to agents on planned tasks and to legacy pixel-crew: types, not to Claude Code types, unplanned agents or a type once routed by name', async ($, on) => {
   const { prompts } = await boot($, on)
   await $.tool.call(PLAN_KINDS as never)
-  await spawnAs($, 1, 'session-router:worker', 'Anything at all')
+  await spawnAs($, 1, FORMER, 'Anything at all')
   await spawnAs($, 2, 'pixel-crew:engineer', 'Something else')
   await spawnAs($, 3, 'general-purpose', 'Build the panel')
   await spawnAs($, 4, 'web-fetch', 'Map the code')
   await spawnAs($, 5, 'Explore', 'Old style')
   await spawnAs($, 6, 'general-purpose', 'Not in the plan')
-  await spawnAs($, 7, 'session-router:worker', 'Has it', `Report with ${STEP} as you go.`)
+  // On a planned task and already naming the step tool: no second line.
+  await spawnAs($, 7, FORMER, 'Build the panel', `Report with ${STEP} as you go.`)
+  // On a planned task, that type is like any other.
+  await spawnAs($, 8, FORMER, 'Map the code')
   const has = prompts.map(p => p.includes('Progress reporting:'))
-  expect(has).toEqual([true, true, true, false, false, false, false])
+  expect(has).toEqual([false, true, true, false, false, false, false, true])
   expect(prompts[6]?.split(STEP)).toHaveLength(2)
+})
+
+test('with no plan reported, no agent of another orchestrator gets the step line; a legacy pixel-crew: type still does', async ($, on) => {
+  const { prompts } = await boot($, on)
+  await spawnAs($, 1, FORMER, 'Anything at all')
+  await spawnAs($, 2, 'some-router:worker', 'Anything at all')
+  await spawnAs($, 3, 'pixel-crew:scout', 'Look around')
+  await spawnAs($, 4, 'general-purpose', 'Go on')
+  expect(prompts.map(p => p.includes('Progress reporting:'))).toEqual([false, false, true, false])
 })
 
 test('autoOpen plan: the panel opens once for a reported plan and its agents, not for other subagents, and not again once closed', { options: { autoOpen: 'plan' } }, async ($, on) => {
