@@ -1,0 +1,188 @@
+{
+  "name": "pixel-crew",
+  "version": "2.1.0",
+  "description": "Pixel Crew: a visual mod, a live agents panel that draws every subagent as a themed pixel mascot dressed for the kind of work it does, and a combined progress and usage bar above the prompt. Pairs with Session Router, which plans the work and splits it across subagents.",
+  "author": { "name": "local" },
+  "license": "MIT",
+  "types": "./types/index.d.ts",
+  "keywords": ["subagents", "mod", "agents-panel", "statusline"],
+  "userConfig": {
+    "theme": {
+      "type": "string",
+      "title": "Look: mascot",
+      "description": "The mascot drawn for Claude and each agent. cat is a black cat; clawd is the Claude Code crab. Each agent wears the costume of the kind of work it does.",
+      "default": "cat",
+      "options": ["cat", "clawd"]
+    },
+    "palette": {
+      "type": "string",
+      "title": "Look: colours",
+      "description": "Colours of the usage meters and pills and, when working bars follow the palette, the working agents. classic is green, amber and red; ocean is teal and blue; sunset is orange and pink.",
+      "default": "ocean",
+      "options": ["ocean", "sunset", "classic"]
+    },
+    "barColors": {
+      "type": "string",
+      "title": "Look: working bars",
+      "description": "The colour of a working agent's bar and dot in the panel. kind uses each agent's own colour, from the kind of work it does; palette uses the accent colour of Look: colours.",
+      "default": "kind",
+      "options": ["kind", "palette"]
+    },
+    "background": {
+      "type": "string",
+      "title": "Look: panel background",
+      "description": "What is drawn behind the agents panel. dots is a dotted pattern, grid is a fine grid, plain is nothing.",
+      "default": "plain",
+      "options": ["plain", "dots", "grid"]
+    },
+    "animations": {
+      "type": "boolean",
+      "title": "Look: animations",
+      "description": "Plays the short entrance motions when the panel opens and when the bar collapses or expands. The twinkle of the progress bars stays either way.",
+      "default": true
+    },
+    "currency": {
+      "type": "string",
+      "title": "Money: currency",
+      "description": "The currency every cost is shown in, by its ISO code. Costs are converted from US dollars at the online rate, refreshed once a day.",
+      "default": "GBP",
+      "options": [
+        "GBP",
+        "USD",
+        "EUR",
+        "CNY",
+        "JPY",
+        "KRW",
+        "INR",
+        "CAD",
+        "AUD",
+        "NZD",
+        "SGD",
+        "MYR",
+        "HKD",
+        "TWD",
+        "THB",
+        "IDR",
+        "VND",
+        "PHP",
+        "CHF",
+        "SEK",
+        "NOK",
+        "DKK",
+        "PLN",
+        "BRL",
+        "MXN",
+        "AED",
+        "SAR",
+        "ZAR",
+        "TRY",
+        "ILS"
+      ]
+    },
+    "rateNow": {
+      "type": "string",
+      "title": "Money: exchange rate (shown only)",
+      "description": "The online rate in use, written here by the mod. Anything typed here is replaced the next time the mod updates it.",
+      "default": ""
+    },
+    "panelUsage": {
+      "type": "string",
+      "title": "Panel: usage meters",
+      "description": "How the agents panel shows context and usage limits. bar draws one meter line each, ring draws them as rings, off hides the usage section.",
+      "default": "bar",
+      "options": ["bar", "ring", "off"]
+    },
+    "autoOpen": {
+      "type": "string",
+      "title": "Panel: opens by itself",
+      "description": "When the agents panel opens without being asked. any opens it once for any subagent or reported plan, plan only once for each reported plan or an agent on one of its tasks, never leaves it to you.",
+      "default": "any",
+      "options": ["any", "plan", "never"]
+    },
+    "barUsage": {
+      "type": "string",
+      "title": "Bar: meter style",
+      "description": "How the bar's context and limit items draw their meter. bar is a small bar, ring is a small ring.",
+      "default": "ring",
+      "options": ["ring", "bar"]
+    },
+    "barContext": {
+      "type": "boolean",
+      "title": "Bar: show context",
+      "description": "Shows a pill with how full the context window is, as a meter, a percent and the tokens used.",
+      "default": true
+    },
+    "barFiveHour": {
+      "type": "boolean",
+      "title": "Bar: show usage left",
+      "description": "Usage left: shows a pill with how much of your plan's usage is left and when it resets. It holds the 5-hour window when your plan has one, else the weekly window.",
+      "default": true
+    },
+    "barWeek": {
+      "type": "boolean",
+      "title": "Bar: show weekly limit",
+      "description": "Shows a pill with how much of the weekly usage window is left and when it resets.",
+      "default": true
+    },
+    "barModelWeek": {
+      "type": "boolean",
+      "title": "Bar: show model weekly limit",
+      "description": "Shows a pill with how much of a model's own weekly window is left, such as Fable's, when Claude Code or the desktop app reports one.",
+      "default": true
+    },
+    "barSpeed": {
+      "type": "boolean",
+      "title": "Bar: show speed",
+      "description": "Shows a pill with how many output tokens a second the last reply came at.",
+      "default": true
+    },
+    "barCache": {
+      "type": "boolean",
+      "title": "Bar: show cache countdown",
+      "description": "Shows a pill counting down the time until the prompt cache expires.",
+      "default": true
+    },
+    "barTurn": {
+      "type": "boolean",
+      "title": "Bar: show turn number",
+      "description": "Shows a pill with the number of the current turn in this session.",
+      "default": true
+    },
+    "barTime": {
+      "type": "boolean",
+      "title": "Bar: show session time",
+      "description": "Shows a pill with how long this session has been running.",
+      "default": true
+    },
+    "barTooltips": {
+      "type": "boolean",
+      "title": "Bar: hover cards",
+      "description": "Shows a small card with the details when the pointer rests on one of the bar's pills, in the desktop app.",
+      "default": true
+    },
+    "textSizeNow": {
+      "type": "string",
+      "title": "Size: panel text (shown only)",
+      "description": "The zoom of the agents panel, written here by the mod. Change it with the - and + buttons in the Crew settings pane (/crew settings).",
+      "default": "100%"
+    },
+    "iconSizeNow": {
+      "type": "string",
+      "title": "Size: mascots (shown only)",
+      "description": "The size of the mascots in the agents panel, written here by the mod. Change it with the - and + buttons in the Crew settings pane (/crew settings).",
+      "default": "200%"
+    },
+    "barSizeNow": {
+      "type": "string",
+      "title": "Size: bar (shown only)",
+      "description": "The size of the bar above the prompt, written here by the mod. Change it with the - and + buttons in the Crew settings pane (/crew settings).",
+      "default": "100%"
+    },
+    "logLinesNow": {
+      "type": "string",
+      "title": "Panel: log lines (shown only)",
+      "description": "How many entries an agent's log shows, written here by the mod. Change it with the - and + buttons in the Crew settings pane (/crew settings).",
+      "default": "50"
+    }
+  }
+}

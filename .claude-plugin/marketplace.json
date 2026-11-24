@@ -1,0 +1,5 @@
+{
+  "name": "crew-local",
+  "owner": { "name": "local" },
+  "plugins": [{ "name": "pixel-crew", "source": "./" }]
+}
