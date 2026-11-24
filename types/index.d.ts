@@ -98,7 +98,7 @@ export type RunStatus = 'running' | 'waiting' | 'done' | 'failed'
 export type AgentRun = {
   id: string
   agentId?: string
-  /** The subagent type as spawned: `session-router:worker`, `Explore`. */
+  /** The subagent type as spawned: `some-router:worker`, `Explore`. */
   type: string
   /** The kind of work, set when it starts and kept for its life (`kindOf` in hooks/model.ts). */
   kind: Kind

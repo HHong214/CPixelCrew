@@ -421,8 +421,8 @@ type Follow = { phase: string; phaseAt: number; thinking: string; tool: string; 
 
 const fin = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
-// A routed worker: a `session-router:` agent, or a `pixel-crew:` one from 1.6.
-const isRouted = (type: string): boolean => /^(?:session-router|pixel-crew):/i.test(type.trim())
+// The mod's own legacy rule: a subagent type that starts `pixel-crew:` (the 1.6 crew roles).
+const isLegacyCrewType = (type: string): boolean => /^pixel-crew:/i.test(type.trim())
 // Claude Code's own subagent types, which never report steps.
 const NO_STEP_TYPES: readonly string[] = ['web-fetch', 'explore', 'plan', 'claude-code-guide', 'statusline-setup']
 // An agent on one of the tasks of a plan still on: its description is a planned title, matched as `plannedOf` matches.
@@ -430,10 +430,11 @@ const isPlanned = (f: Flow | null, description: string): boolean => {
   const key = norm(typeof description === 'string' ? description : '')
   return !!key && !!f && !f.isFinished && Array.isArray(f.tasks) && f.tasks.some(t => norm(String(t?.title ?? '')) === key)
 }
-// Whether a new agent's brief asks it to report steps: a routed worker, or an agent on a
-// planned task that is not one of Claude Code's own types.
+// Whether a new agent's brief asks it to report steps, and whether it counts toward a plan's
+// running agents: a legacy `pixel-crew:` type, or an agent on a planned task whatever its type
+// (except Claude Code's own types).
 const wantsSteps = (type: string, description: string, f: Flow | null): boolean =>
-  isRouted(type) || (isPlanned(f, description) && !NO_STEP_TYPES.includes(type.trim().toLowerCase()))
+  isLegacyCrewType(type) || (isPlanned(f, description) && !NO_STEP_TYPES.includes(type.trim().toLowerCase()))
 const isActive = (a: AgentRun): boolean => a.status === 'running' || a.status === 'waiting'
 const unwait = (doing: string): string => (doing.startsWith(APPROVAL) ? doing.slice(APPROVAL.length) : doing)
 const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`
@@ -1591,7 +1592,7 @@ async function onStep($: EngineInterface, e: In<'tool.call'>) {
   return { result: isFound ? 'ok' : `ignored: no panel row for agent ${agentId}` }
 }
 
-// Safety net for the phase: launching a routed worker or an agent on a planned task moves
+// Safety net for the phase: launching an agent on a planned task (or a legacy `pixel-crew:` one) moves
 // a reported plan on even when the orchestrator forgets to report. Nothing draws the count
 // it keeps (`flow.running`); with no plan, or a finished one, nothing is made or changed:
 // the run counts the agents.
@@ -1602,7 +1603,7 @@ async function onAgentTool($: EngineInterface, e: Parameters<AgentToolHook>[1], 
     // Clipped as onAgentSpawn and the stored titles are, so a long planned title still matches.
     const description = clip(printable(String((e as { description?: unknown }).description ?? '')), MAX_DESCRIPTION)
     const plan = await read($, flowState)
-    if (plan && !plan.isFinished && (isRouted(type) || isPlanned(plan, description))) {
+    if (plan && !plan.isFinished && wantsSteps(type, description, plan)) {
       await update($, flowState, prev => {
         if (!prev || prev.isFinished) return prev
         return { ...prev, running: prev.running + 1, phase: prev.phase === 'plan' ? 'delegate' : prev.phase }
@@ -3191,7 +3192,7 @@ export const register: Register = (on, options) => {
 
 const GUIDE_MD = `## Run a plan
 
-- To plan work and split it across subagents, use the companion plugin Session Router: \`/session-router:route <task>\`.
+- Any orchestrator can report a plan through the \`progress\` tool, and the plan then shows in the panel. The panel and the bar work with no orchestrator installed.
 
 ## Commands
 

@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.3.0
+
+### Changed
+
+- The mod now stands on its own: it no longer names or depends on any other mod. The panel and the bar work with no orchestrator installed, and any orchestrator can report a plan to the panel through the `progress` tool.
+- The step line (the request to report steps with `step`) now goes to any subagent whose task is in a reported plan, whatever its type. It is no longer given to a subagent because of a type name that starts with another mod's name. Agents of the mod's own older `pixel-crew:` types still get it, and Claude Code's own types still do not.
+- The guide says the same: any orchestrator can report a plan through the `progress` tool.
+- Nothing else changes: every drawing and every other behaviour is as in 2.2.0.
+
 ## 2.2.0
 
 ### Changed

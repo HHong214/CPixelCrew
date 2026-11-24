@@ -2,7 +2,7 @@
 
 CPixelCrew is a visual mod for Claude Code. It draws an agents panel, where every subagent appears as a pixel mascot dressed for the kind of work it does, and a bar above the prompt with progress and usage figures. It also adds a Crew settings pane, a short guide, the `/crew` command and two small tools the model uses to report progress. It has no skills and no agents of its own: it shows any subagent, whoever started it.
 
-To plan work and split it across subagents, use the companion plugin Session Router (`/session-router:route <task>`). The two work together, and each works without the other.
+The panel and the bar work with no orchestrator installed. Any orchestrator can call the two tools, `progress` to report a plan and `step` to report a subagent's steps, and the plan then shows in the panel. One optional companion that does this is [CSessionRouter](https://github.com/HHong214/CSessionRouter), which plans work and splits it across subagents.
 
 ## Quick start
 
@@ -254,7 +254,7 @@ Each task's `title` must equal the Agent `description` the task is started with,
 
 **`mcp__CPixelCrew__step`.** A subagent reports its own steps (`done`, `total`, `note`); it fills that agent's row bar and adds a line to its log. A call from the main session is ignored. The tool is in every agent's tool list, not behind a search.
 
-When a subagent starts, the mod adds a line to the end of its brief asking it to report steps with `step`, unless the brief already names the tool. It does this for a `session-router:` agent (or a 1.6 `pixel-crew:` one), and for an agent whose description matches a planned task, unless it is one of Claude Code's own types (`web-fetch`, `Explore`, `Plan`, `claude-code-guide`, `statusline-setup`).
+When a subagent starts, the mod adds a line to the end of its brief asking it to report steps with `step`, unless the brief already names the tool. It does this for an agent whose description matches a planned task, whatever its type, and for a 1.6 `pixel-crew:` one, unless it is one of Claude Code's own types (`web-fetch`, `Explore`, `Plan`, `claude-code-guide`, `statusline-setup`).
 
 ## Cost and privacy
 
@@ -282,7 +282,7 @@ When a subagent starts, the mod adds a line to the end of its brief asking it to
 
 ## Changed from 1.6
 
-- The three skills (`crew-flow`, `crew-delegate`, `crew-review`) and the eleven worker agents are gone. Planning and delegating moved to Session Router.
+- The three skills (`crew-flow`, `crew-delegate`, `crew-review`) and the eleven worker agents are gone. Planning and delegating are left to whatever orchestrator you use.
 - Subagents are drawn by their kind of work, not by a crew role, and each gets its own shade of its kind's colour. Any other agent is a Helper in one of six colours, never grey.
 - The top of the panel is one card: figures, gauges and a new usage split (router against subagents, and tokens per model). Headings are in sentence case.
 - Agent rows show `in · out` with the cache counted in `in`; the cache read and write figures are at the top of the row's log.
