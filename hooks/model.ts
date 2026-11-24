@@ -455,6 +455,7 @@ export const DEFAULT_SETTINGS: Settings = {
   logLines: DEFAULT_SIZES.logLines,
   animations: true,
   barTooltips: true,
+  heroCard: true,
 }
 
 // Where each size is clamped: percent for the sizes, entries for `logLines`. Values are whole numbers.
@@ -638,6 +639,8 @@ export function normalizeSettings(raw: unknown): Settings {
     logLines: sizeFrom(r, 'logLines'),
     animations: optionFlag(r.animations, d.animations),
     barTooltips: optionFlag(r.barTooltips, d.barTooltips),
+    // Kept in the mod's store, never an option: only a real `false` switches the cards off.
+    heroCard: r.heroCard !== false,
   }
 }
 
@@ -658,12 +661,14 @@ export function sizesOf(s: Settings): Sizes {
  * numbers come only from `sizes` (a size an old options object still holds is ignored),
  * so with no sizes stored they are `DEFAULT_SIZES`. `barItems` is the items switched on,
  * in the order `order` gives (`normalizeBarOrder`: missing or junk is the default order).
+ * `heroCard` comes only from the fourth argument, the stored switch: false only when it is
+ * exactly `false`; whatever `options` holds under it is ignored.
  * The mirror options are never read.
  */
-export function settingsFromOptions(options: unknown, sizes?: unknown, order?: unknown): Settings {
+export function settingsFromOptions(options: unknown, sizes?: unknown, order?: unknown, heroCard?: unknown): Settings {
   const base = normalizeSettings(options)
   const barItems = normalizeBarOrder(order).filter(k => base.barItems.includes(k))
-  return { ...base, ...normalizeSizes(sizes), barItems }
+  return { ...base, ...normalizeSizes(sizes), barItems, heroCard: heroCard !== false }
 }
 
 // The option keys that are real settings, in the manifest's order.
@@ -682,7 +687,7 @@ const SETTING_KEYS: readonly SettingOptionKey[] = [
 ]
 
 // What `/crew set` takes: every setting option, the four sizes, and `barItems` to set the eight booleans at once.
-const SET_KEYS: readonly (SettingOptionKey | SizeKey | 'barItems')[] = [...SETTING_KEYS, ...SIZE_KEYS, 'barItems']
+const SET_KEYS: readonly (SettingOptionKey | SizeKey | 'barItems' | 'heroCard')[] = [...SETTING_KEYS, ...SIZE_KEYS, 'barItems', 'heroCard']
 
 // `all`, `none`, or a list naming only known items; anything else is a typo.
 const barItemsSet = (v: string): BarItem[] | undefined => {
@@ -744,6 +749,8 @@ export function setSetting(s: Settings, key: string, value: string): Settings | 
       return set('animations', boolOf(v))
     case 'barTooltips':
       return set('barTooltips', boolOf(v))
+    case 'heroCard':
+      return set('heroCard', boolOf(v))
     default:
       return null
   }

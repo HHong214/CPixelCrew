@@ -225,6 +225,8 @@ export type Settings = {
   animations: boolean
   /** Hover cards on the bar's pills. */
   barTooltips: boolean
+  /** A glass card behind each mascot in the panel. Kept in the mod's store, set in the Crew settings pane; not an option. */
+  heroCard: boolean
 }
 
 /** The four numbers the Crew settings pane steps; the plugin screen only mirrors them as text. */

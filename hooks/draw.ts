@@ -258,12 +258,12 @@ export function loopAnchors(css: string): string {
   return anchors
 }
 
-type DocOpts = { theme?: ThemeName; rules?: string; kit?: Kit; clock?: number }
+type DocOpts = { theme?: ThemeName; rules?: string; kit?: Kit; clock?: number; hero?: boolean }
 
 const doc = (W: number, H: number, body: string, alt: string, o: DocOpts = {}): Drawing => {
   const h = Math.round(clamp(H, 1, MAX_H))
   const kit = o.kit ?? NO_KIT
-  const rules = o.rules ?? PANE_RULES
+  const rules = (o.rules ?? PANE_RULES) + (o.hero ? HERO_RULES : '')
   const css = `<style>${rules}${kit.any ? ENTER_RULES : ''}</style>`
   const sprites = o.theme ? spriteCss(o.theme) : ''
   const loopT = Number.isFinite(o.clock) ? Math.round((((o.clock as number) % LOOP_DAY_MS) + LOOP_DAY_MS) % LOOP_DAY_MS) : undefined
@@ -282,6 +282,25 @@ const themeOf = (s: Settings | undefined): ThemeName => (s?.theme === 'cat' ? 'c
 // `role` is the costume's sprite key; `color` its accent, the agent's own colour.
 const mascot = (theme: ThemeName, role: string, pose: Pose, x: number, y: number, scale: number, color?: string): string =>
   sprite({ theme, role, pose, x: Math.round(fin(x)), y: Math.round(fin(y)), scale: r(scale), ...(color ? { color } : {}) })
+
+// The hero card: a see-through glass card with a one-pixel frame and notched corners, 34 x 32
+// grid pixels, behind the mascot of each row of the panel. `hero-f` is the glass, `hero-r` the
+// frame; two paths, so the see-through fill shows no seams. A drawing that holds one carries
+// its two colour rules, and no other drawing does.
+const HERO_GLASS = 'M2 1H32V2H33V30H32V31H2V30H1V2H2Z'
+const HERO_FRAME = 'M1 0H33V1H34V31H33V32H1V31H0V1H1ZM2 1H32V2H33V30H32V31H2V30H1V2H2Z'
+const HERO_RULES = `
+.hero-f{fill:#1F1E1D;fill-opacity:.05}.hero-r{fill:#1F1E1D;fill-opacity:.3}
+@media (prefers-color-scheme: dark){.hero-f{fill:#F4F1E8;fill-opacity:.3}.hero-r{fill:#F4F1E8;fill-opacity:.62}}`
+// A card is drawn only when the setting says so; with no settings there is none.
+const heroOn = (s: Settings | undefined): boolean => s?.heroCard === true
+// The card's size in SVG units for a mascot at scale `k`: the mascot's box and two pixels each side.
+const heroW = (k: number): number => (SPRITE_W + 4) * k
+const heroH = (k: number): number => (SPRITE_H + 4) * k
+// The card at (x, y) and the mascot exactly 2k inside it, unrounded so its pixels meet the frame's.
+const heroed = (theme: ThemeName, role: string, pose: Pose, x: number, y: number, k: number, color?: string): string =>
+  `<g class="hero" transform="translate(${r(x)},${r(y)}) scale(${r(k)})"${pose === 'planned' ? ' opacity="0.45"' : ''}><path class="hero-f" d="${HERO_GLASS}"/><path class="hero-r" fill-rule="evenodd" d="${HERO_FRAME}"/></g>` +
+  sprite({ theme, role, pose, x: fin(x) + 2 * k, y: fin(y) + 2 * k, scale: r(k), ...(color ? { color } : {}) })
 
 // The cat on its flying broom, for the bar's progress row. `ride` is joining the sprites'
 // `Pose`; until it does, it is named here and `sprite()` draws an unknown pose as `done`.
@@ -576,7 +595,7 @@ type Build = (topW: number, restW: number) => { top: Block[]; rest: Block[] }
 // The mascot on the left and every block in the column beside it; when that column
 // would be under SIDE_MIN, only `top` stays beside it and `rest` runs full width below;
 // under BESIDE_MIN the mascot sits alone on top.
-const rowLayout = (W: number, sw: number, sh: number, pad: number, build: Build, drawMascot: (x: number, y: number) => string): { body: string; H: number } => {
+const rowLayout = (W: number, sw: number, sh: number, pad: number, build: Build, drawMascot: (x: number, y: number) => string, whole = false): { body: string; H: number } => {
   const R = W - 2
   const x0 = Math.round(sw + 10)
   const col = R - x0
@@ -584,7 +603,8 @@ const rowLayout = (W: number, sw: number, sh: number, pad: number, build: Build,
     const { top, rest } = build(col, col)
     const all = [...top, ...rest]
     const H = Math.ceil(Math.max(pad * 2 + sumH(all), sh + 12))
-    return { body: drawMascot(0, Math.min((H - sh) / 2, pad + 2)) + placeAll(all, x0, pad), H }
+    const y = Math.min((H - sh) / 2, pad + 2)
+    return { body: drawMascot(0, whole ? Math.round(y) : y) + placeAll(all, x0, pad), H }
   }
   if (col >= BESIDE_MIN) {
     const { top, rest } = build(col, R)
@@ -1204,14 +1224,15 @@ export function mainDrawing(c: Ctx, main: MainRun, agentsRunning: number, usage:
       rest: [lineBlock(doing, 13, 17, 15, restW, 3, { cls: status === 'resting' ? 'm' : 't' }), statsBlock, strip.block(restW)],
     }
   }
-  const { body, H } = rowLayout(W, SPRITE_W * k, SPRITE_H * k, MAIN_PAD, build, (x, y) => mascot(theme, 'main', pose, x, y, k))
+  const card = heroOn(c?.settings)
+  const { body, H } = rowLayout(W, card ? heroW(k) : SPRITE_W * k, card ? heroH(k) : SPRITE_H * k, MAIN_PAD, build, (x, y) => (card ? heroed(theme, 'main', pose, x, y, k) : mascot(theme, 'main', pose, x, y, k)), card)
   const alt = `Claude, ${word}: ${doing}.${model ? ' ' + model + '.' : ''} ${stats}; ${strip.alt}${n ? `; ${crew} running` : ''}`
   // Redrawn every tick while it or any agent works; resting, it holds still. A resting row
   // whose minutes move is anchored to the moment its text last changed, so the mascot's
   // loops go on where they were rather than restart with the new text.
   const isMoving = status !== 'resting' || n > 0
   const restAnchor = hasRested && Number.isFinite(c?.clock) ? fin(main?.doingSince, now) + mins * 60_000 : undefined
-  return doc(W, H, body, alt, { theme, kit, clock: isMoving ? c?.clock : restAnchor })
+  return doc(W, H, body, alt, { theme, kit, clock: isMoving ? c?.clock : restAnchor, hero: card })
 }
 
 const runPose = (s: string): Pose => (s === 'running' ? 'work' : s === 'waiting' ? 'wait' : 'done')
@@ -1270,10 +1291,11 @@ export function agentDrawing(c: Ctx, a: AgentRun): Drawing {
       rest: [{ h: doingBlock.h + (doingBlock.h ? 1 : 0), draw: doingBlock.draw }, statsBlock, ...(isMoving ? [progressBar] : [])],
     }
   }
-  const { body, H } = rowLayout(W, SPRITE_W * k, SPRITE_H * k, PAD, build, (x, y) => mascot(theme, costume, runPose(status), x, y, k, own))
+  const card = heroOn(c?.settings)
+  const { body, H } = rowLayout(W, card ? heroW(k) : SPRITE_W * k, card ? heroH(k) : SPRITE_H * k, PAD, build, (x, y) => (card ? heroed(theme, costume, runPose(status), x, y, k, own) : mascot(theme, costume, runPose(status), x, y, k, own)), card)
   const alt = `${label} agent, ${status}: ${title}.${doing ? ' ' + doing + '.' : ''}${steps ? ' Step ' + steps + '.' : ''} ${stats}`
   // A working or waiting row is redrawn every tick (its clock runs); a finished one holds still.
-  return doc(W, H, body + hairline(W, H - 0.5), alt, { theme, kit, clock: isMoving ? c?.clock : undefined })
+  return doc(W, H, body + hairline(W, H - 0.5), alt, { theme, kit, clock: isMoving ? c?.clock : undefined, hero: card })
 }
 
 // A task the plan holds that no agent has started: dimmed mascot, number, title, kind,
@@ -1297,8 +1319,9 @@ export function plannedDrawing(c: Ctx, p: Planned): Drawing {
     }
     return { top: [head, richBlock([{ s: label, fill: own, weight: 600 }, { s: meta.length ? (label ? ' · ' : '') + meta.join(' · ') : '', cls: 'm' }], 11.5, 15, 14, topW, 2)], rest: [] }
   }
-  const { body, H } = rowLayout(W, SPRITE_W * k, SPRITE_H * k, PAD, build, (x, y) => mascot(theme, KINDS[kind].sprite, 'planned', x, y, k, own))
-  return doc(W, H, body + hairline(W, H - 0.5), `Planned: ${title}${label ? ', for ' + label : ''}${after.length ? ', after ' + after.join(', ') : ''}`, { theme, kit })
+  const card = heroOn(c?.settings)
+  const { body, H } = rowLayout(W, card ? heroW(k) : SPRITE_W * k, card ? heroH(k) : SPRITE_H * k, PAD, build, (x, y) => (card ? heroed(theme, KINDS[kind].sprite, 'planned', x, y, k, own) : mascot(theme, KINDS[kind].sprite, 'planned', x, y, k, own)), card)
+  return doc(W, H, body + hairline(W, H - 0.5), `Planned: ${title}${label ? ', for ' + label : ''}${after.length ? ', after ' + after.join(', ') : ''}`, { theme, kit, hero: card })
 }
 
 // ---------------------------------------------------------------------------
@@ -1376,8 +1399,9 @@ const compactLine = (c: Ctx, o: LineSpec): Drawing => {
   const theme = themeOf(c?.settings)
   const kit = kitOf(c?.enterAgeMs, c?.settings)
   const k = COMPACT_SCALE * iconK(c?.settings)
-  const sw = SPRITE_W * k
-  const sh = SPRITE_H * k
+  const card = heroOn(c?.settings)
+  const sw = card ? heroW(k) : SPRITE_W * k
+  const sh = card ? heroH(k) : SPRITE_H * k
   const H = Math.max(COMPACT_LINE_H, Math.ceil(sh + 6))
   const base = H / 2 + 4
   const x = Math.round(sw + 8)
@@ -1392,11 +1416,11 @@ const compactLine = (c: Ctx, o: LineSpec): Drawing => {
   const title = fit(o.title, 12.5, end - x - metaW(meta))
   const line: Part[] = title ? [{ s: title, cls: 't', weight: 600 }, ...(meta.length ? [{ s: GAP }, ...meta.map(p => ({ ...p, size: 11.5 }))] : [])] : []
   const body =
-    mascot(theme, o.costume, o.pose, 0, (H - sh) / 2, k, o.color) +
+    (card ? heroed(theme, o.costume, o.pose, 0, Math.round((H - sh) / 2), k, o.color) : mascot(theme, o.costume, o.pose, 0, (H - sh) / 2, k, o.color)) +
     rich(x, base, line, 12.5) +
     text(W - 16, base, right, { cls: o.strong ? 't' : 's', size: 11.5, weight: o.strong ? 600 : undefined, anchor: 'end', num: true }) +
     o.mark(W - 6, H / 2)
-  return doc(W, H, body, o.alt, { theme, kit, clock: o.isMoving ? c?.clock : undefined })
+  return doc(W, H, body, o.alt, { theme, kit, clock: o.isMoving ? c?.clock : undefined, hero: card })
 }
 
 /** The main agent's compact line: `Claude`, its status word and model, the plan's count at the right. */

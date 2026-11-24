@@ -225,6 +225,9 @@ const SIZES_KEY = 'sizes'
 // The bar items' order, all eight (`BarItem[]`), set in the settings pane or by
 // `/crew set barOrder`, which takes this same name.
 const ORDER_KEY = 'barOrder'
+// Whether the agents panel draws a glass card behind each mascot (a boolean), set in the
+// settings pane or by `/crew set heroCard`. Kept in the store, never an option.
+const HERO_KEY = 'heroCard'
 // Whether the agents panel is in compact mode (`{ isCompact }`), kept across sessions.
 const COMPACT_KEY = 'compact'
 // The sessions whose agents pane the mod opened and nobody has closed since: `{ [sessionId]:
@@ -314,7 +317,7 @@ const STATUS_GLYPHS: Record<AgentRun['status'], string> = { running: '●', wait
 
 const USAGE_TEXT =
   'Usage: /crew (show or hide the agents panel), /crew open, /crew bar (collapse or expand the bar), /crew settings (show or hide the settings pane), ' +
-  `/crew guide (show or hide the guide pane), /crew set <key> <value> (${[...SETTING_OPTION_KEYS, ...SIZE_KEYS].join(', ')}, barItems, barOrder), /crew reset.`
+  `/crew guide (show or hide the guide pane), /crew set <key> <value> (${[...SETTING_OPTION_KEYS, ...SIZE_KEYS].join(', ')}, barItems, barOrder, heroCard), /crew reset.`
 
 // ---------------------------------------------------------------------------
 // State. Rates, the bar's collapsed flag and the sizes are also kept in `$.store`;
@@ -342,7 +345,9 @@ let sizesLoaded = false
 let sizesLoading: Promise<void> | null = null
 let orderNow: BarItem[] = [...DEFAULT_BAR_ORDER]
 let orderLoaded = false
-const settingsNow = (): Settings => settingsFromOptions(optionsNow, sizesNow, orderNow)
+let heroNow = true
+let heroLoaded = false
+const settingsNow = (): Settings => settingsFromOptions(optionsNow, sizesNow, orderNow, heroNow)
 
 // Once per module load: the reset step or the mirror sync (`afterLoad`). The mirror sync
 // stops for this load after a write the settings refuse; `mirrorsWritten` holds the texts
@@ -754,8 +759,9 @@ async function applySettings($: EngineInterface, before: Settings, after: Settin
 }
 
 // What `/crew set` takes: every option that is a setting, the four sizes, `barItems` (a
-// list that sets the eight `bar*` options) and `barOrder` (the bar order, in the store).
-const SET_KEYS: readonly string[] = [...SETTING_OPTION_KEYS, ...SIZE_KEYS, 'barItems', ORDER_KEY]
+// list that sets the eight `bar*` options), `barOrder` (the bar order, in the store) and
+// `heroCard` (the cards behind the mascots, in the store).
+const SET_KEYS: readonly string[] = [...SETTING_OPTION_KEYS, ...SIZE_KEYS, 'barItems', ORDER_KEY, HERO_KEY]
 const isSizeKey = (key: string): key is keyof Sizes => (SIZE_KEYS as readonly string[]).includes(key)
 const itemName = (k: BarItem): string => BAR_ITEMS.find(b => b.key === k)?.name ?? k
 
@@ -805,6 +811,10 @@ async function setOption($: EngineInterface, key: string, value: string): Promis
     const why = await saveSizes($, sizesOf(next))
     return why ? `Could not set ${field}: ${why}` : `Set ${field} to ${shownSetting(next, field)}.`
   }
+  if (field === HERO_KEY) {
+    const why = await saveHero($, next.heroCard)
+    return why ? `Could not set ${field}: ${why}` : `Set ${field} to ${next.heroCard}.`
+  }
   const { refused } = await applySettings($, before, next)
   if (refused) return `Could not set ${refused.key}: ${refused.why}`
   return `Set ${field} to ${shownSetting(next, field)}.`
@@ -813,10 +823,10 @@ async function setOption($: EngineInterface, key: string, value: string): Promis
 // ---------------------------------------------------------------------------
 // Sizes, mirrors and the reset.
 
-// Reads the sizes and the bar order from the store, once per module load; anything
+// Reads the sizes, the bar order and the hero card switch from the store, once per module load; anything
 // unreadable is the defaults. A value stored by this load before the read finished stands.
 async function loadSizes($: EngineInterface): Promise<void> {
-  if (sizesLoaded && orderLoaded) return
+  if (sizesLoaded && orderLoaded && heroLoaded) return
   const stored = async (key: string): Promise<unknown> => $.store.get(key).catch(() => undefined)
   sizesLoading ??= (async () => {
     const sizes = sizesLoaded ? undefined : await stored(SIZES_KEY)
@@ -825,6 +835,9 @@ async function loadSizes($: EngineInterface): Promise<void> {
     const order = orderLoaded ? undefined : await stored(ORDER_KEY)
     if (!orderLoaded) orderNow = normalizeBarOrder(order)
     orderLoaded = true
+    const hero = heroLoaded ? undefined : await stored(HERO_KEY)
+    if (!heroLoaded) heroNow = hero !== false
+    heroLoaded = true
   })()
   await sizesLoading
 }
@@ -873,6 +886,27 @@ async function saveOrder($: EngineInterface, next: readonly BarItem[]): Promise<
   orderLoaded = true
   $.ui.invalidate('ui.render')
   return null
+}
+
+// Writes the hero card switch to the store and this load's copy, then asks for a redraw
+// (no option write follows to bring one). Null once stored, else why not.
+async function saveHero($: EngineInterface, next: boolean): Promise<string | null> {
+  try {
+    await $.store.set(HERO_KEY, next)
+  } catch (err) {
+    return printable(err instanceof Error ? err.message : String(err)) || 'could not be stored'
+  }
+  heroNow = next
+  heroLoaded = true
+  $.ui.invalidate('ui.render')
+  return null
+}
+
+// The Hero cards button of the settings pane: flips the switch as it is at the press.
+async function flipHero($: EngineInterface): Promise<void> {
+  await loadSizes($)
+  const why = await saveHero($, !heroNow)
+  if (why) $.ui.toast(`Could not set ${HERO_KEY}: ${why}`)
 }
 
 // An order button of the settings pane: the stored order as it is at the press, the item
@@ -953,10 +987,12 @@ async function startReset($: EngineInterface): Promise<string> {
   await setResetting($, true)
   const sizesWhy = await saveSizesOnly($, { ...DEFAULT_SIZES })
   const orderWhy = await saveOrder($, DEFAULT_BAR_ORDER)
+  const heroWhy = await saveHero($, true)
   const refused = await resetStep($)
   if (refused) return `Could not reset ${refused}`
   if (sizesWhy) return `Could not reset the sizes: ${sizesWhy}`
   if (orderWhy) return `Could not reset the bar order: ${orderWhy}`
+  if (heroWhy) return `Could not reset the hero cards: ${heroWhy}`
   return 'Resetting the crew settings to their defaults.'
 }
 
@@ -3034,6 +3070,18 @@ function settingsPane($: EngineInterface, ui: Kit, s: Settings, order: readonly 
       </Text>
       {STEPPERS.map(stepper)}
       <Text size="heading" weight="semibold">
+        Look
+      </Text>
+      <Text dimColor wrap="wrap">
+        A glass card behind each mascot in the panel.
+      </Text>
+      <Box key="hero-row" flexDirection="row" alignItems="center">
+        <Box width={STEPPER_NAME} flexShrink={0}>
+          <Text>Hero cards</Text>
+        </Box>
+        {button(ui, 'hero-card', s.heroCard ? 'On' : 'Off', act(() => flipHero($)))}
+      </Box>
+      <Text size="heading" weight="semibold">
         Bar items order
       </Text>
       <Text dimColor wrap="wrap">
@@ -3156,6 +3204,8 @@ export const register: Register = (on, options) => {
   sizesLoading = null
   orderNow = [...DEFAULT_BAR_ORDER]
   orderLoaded = false
+  heroNow = true
+  heroLoaded = false
   afterLoadStarted = false
   mirrorsStopped = false
   resettingNow = false
