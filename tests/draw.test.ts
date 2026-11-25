@@ -881,7 +881,7 @@ describe('main agent row', () => {
 
   test('a running segment is filled as far as the fill says, in turn; with no fill, half', async () => {
     const runs = (fill?: number): number[] =>
-      [...mainDrawing(ctxOf(480), fullMain(), 2, fullUsage(), flow, fill).source.matchAll(new RegExp(`<rect fill="${FLOW_ACCENT}" x="[\\d.]+" y="[\\d.]+" width="([\\d.]+)"`, 'g'))].map(m => Number(m[1]))
+      [...one(mainDrawing(ctxOf(480), fullMain(), 2, fullUsage(), flow, fill)).source.matchAll(new RegExp(`<rect fill="${FLOW_ACCENT}" x="[\\d.]+" y="[\\d.]+" width="([\\d.]+)"`, 'g'))].map(m => Number(m[1]))
     const seg = Number(/<rect fill="#5fbf8f" x="[\d.]+" y="[\d.]+" width="([\d.]+)"/.exec(one(mainDrawing(ctxOf(480), fullMain(), 2, fullUsage(), flow)).source)?.[1])
     // 0.75 of six tasks is 4.5: three done, the first running one full, the second half.
     const [a, b] = runs(0.75)

@@ -127,7 +127,7 @@ async function paneWords($: Engine, surface: 'desktop' | 'terminal' = 'terminal'
   await p.unmount()
   return text
 }
-// The terminal pane's session line: `≈$0.30 · 273k tokens · 1:00`.
+// The terminal pane's session line: `≈$0.30 · 273k tokens · 1m`.
 async function sessionLine($: Engine): Promise<string> {
   return (await paneWords($)).split(/\r?\n/).find(l => / tokens · /.test(l)) ?? ''
 }
@@ -436,8 +436,8 @@ test('audit #5: five idle minutes after a turn, the main row says last turn 5m a
   const alts = (await p.findAll({ type: 'Svg' })).map(s => String(s.props.alt))
   await p.unmount()
   expect(alts.find(a => a.startsWith('Claude,'))).toContain('last turn 5m ago')
-  // The session started a minute before T0: six minutes in (the read itself is a second on).
-  expect(alts.find(a => a.startsWith('Session: '))).toMatch(/Time 6:0[01]/)
+  // The session started a minute before T0: six minutes in, in whole minutes (2.5.0, B1).
+  expect(alts.find(a => a.startsWith('Session: '))).toMatch(/Time 6m\b/)
 })
 
 test('audit #3b: the session tokens do not drop once the session has passed 200 agents', async ($, on) => {
