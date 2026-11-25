@@ -1276,11 +1276,13 @@ test('desktop: the compact panel is the small card, a line for Claude and each a
   await p.press({ key: 'toggle-compact' })
   // The scroll-bar gutter's empty drawing aside.
   const alts = (await p.findAll({ type: 'Svg' })).map(x => String(x.props.alt)).filter(a => a)
-  // After the title row's drawing and its three icons: the card, Claude, the agent at work, the counts.
-  expect(alts.slice(4).map(a => a.split(/[:;,]/)[0])).toEqual(['Session', 'Claude', 'Build agent', '1 finished'])
-  expect(alts[5]).toMatch(/^Claude, working/)
-  expect(alts[6]).toContain('Write the parser')
-  expect(alts[7]).toBe('1 finished, 1 failed')
+  // After the title row's drawing and its three icons: the card, then each line's mascot and its text (side by side, mascot first): Claude, the agent at work; then the counts.
+  expect(alts.slice(4).map(a => a.split(/[:;,]/)[0])).toEqual(['Session', 'Claude (work)', 'Claude', 'Write the parser (work)', 'Build agent', '1 finished'])
+  expect(alts[5]).toBe('Claude (work)')
+  expect(alts[7]).toBe('Write the parser (work)')
+  expect(alts[6]).toMatch(/^Claude, working/)
+  expect(alts[8]).toMatch(/^Build agent.*Write the parser/)
+  expect(alts[9]).toBe('1 finished, 1 failed')
   // The small card sits on the bar's panel too.
   await expectOnBarPanel(p, 'Session: ')
   // No rows, logs or headings in compact mode.

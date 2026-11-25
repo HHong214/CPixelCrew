@@ -3657,7 +3657,7 @@ function agentsDesktop($: EngineInterface, ui: SvgKit, s: Snap, columns: number,
   }
   // A row's two pictures side by side (B2), and under an agent's or a planned row the hairline,
   // one constant picture stretched to the row's width. PANE_BUDGET counts all of them (B9).
-  // The text picture's alt tells the row; the mascot beside it is decoration, with none.
+  // The text picture's alt tells the row; the mascot beside it carries its own drawing's alt, and the line HAIRLINE's: the desktop app drops an Svg whose alt is empty.
   const rowCost = (r: Row, isLined: boolean): number => r.mascot.source.length + r.text.source.length + (isLined ? HAIRLINE.source.length : 0)
   const pair = (key: string, r: Row, isLined: boolean): RenderElement => {
     spent += rowCost(r, isLined)
@@ -3667,14 +3667,14 @@ function agentsDesktop($: EngineInterface, ui: SvgKit, s: Snap, columns: number,
       <Box key={`${key}-pair`} position="relative" flexDirection="row" alignItems="flex-start" flexShrink={0}>
         {svgOf(`${key}-text`, r.text)}
         <Box key={`${key}-corner`} position="absolute" top={0} left={0}>
-          {svgOf(`${key}-mascot`, r.mascot, '')}
+          {svgOf(`${key}-mascot`, r.mascot)}
         </Box>
       </Box>
     ) : (
       // Side by side: the mascot picture is its own size; where 2.4.0 centred the mascot
       // (`centred`), the two pictures are centred against each other (B4).
       <Box key={`${key}-pair`} flexDirection="row" alignItems={r.centred ? 'center' : 'flex-start'} flexShrink={0}>
-        {svgOf(`${key}-mascot`, r.mascot, '')}
+        {svgOf(`${key}-mascot`, r.mascot)}
         {svgOf(`${key}-text`, r.text)}
       </Box>
     )
@@ -3682,7 +3682,7 @@ function agentsDesktop($: EngineInterface, ui: SvgKit, s: Snap, columns: number,
     return (
       <Box key={key} flexDirection="column" flexShrink={0}>
         {both}
-        <Svg key={`${key}-line`} source={HAIRLINE.source} alt="" width={Math.round((r.over ? r.text.width : r.mascot.width + r.text.width) * z)} height={Math.max(1, Math.round(z))} />
+        <Svg key={`${key}-line`} source={HAIRLINE.source} alt={HAIRLINE.alt} width={Math.round((r.over ? r.text.width : r.mascot.width + r.text.width) * z)} height={Math.max(1, Math.round(z))} />
       </Box>
     )
   }

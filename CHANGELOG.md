@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.5.2 (2026-11-25)
+
+### Fixed
+
+- In the desktop app the characters were gone from the panel: an empty space stood where the main agent's character belongs, no agent's row had its character, and the thin line under each row was missing too. Since 2.5.0 each character and each line is a picture of its own and was handed to the app with an empty description (`alt`), and the app drops a picture whose description is empty. Each now carries one: the character's own (for example `Claude (work)`), and `Row divider` for the line. The bar was not affected.
+
 ## 2.5.1 (2026-11-25)
 
 ### Fixed
