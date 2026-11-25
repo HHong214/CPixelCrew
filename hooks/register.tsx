@@ -32,6 +32,7 @@ import type {
 
 import type { AgentRun, BarItem, Flow, Frame, FrameSnap, Hold, Limit, Look, LogEntry, LogKind, LogOutcome, MainRun, Rates, Retired, Run, Settings, Sizes, Usage, View } from '../types'
 import {
+  APPROVAL,
   BAR_ITEMS,
   CURRENCIES,
   DEFAULT_BAR_ORDER,
@@ -64,7 +65,7 @@ import {
   closeLog,
   closedRun,
   fitRows,
-  isStuck,
+  isLost,
   LIVE_LOG,
   drawnRows,
   contextGauge,
@@ -291,7 +292,6 @@ const MIN_TOKENS = 20
 const MIN_SECONDS = 0.5
 const MAX_SPEED = 1_000
 
-const APPROVAL = 'Waiting for your approval: '
 // What the panel's title says while no plan is on; the task rows say `No task yet`.
 const NO_TASK = 'No task yet'
 const NO_TASK_YET = 'No task yet'
@@ -522,7 +522,8 @@ function finishRun(a: AgentRun, at: number, status: 'done' | 'failed', text: str
   const outcome: LogOutcome = status === 'done' ? 'ok' : 'error'
   const ms = Math.max(0, at - a.startedAt)
   return {
-    ...a,
+    // A real end carries no mark (C1).
+    ...unmarked(a),
     status,
     endedAt: at,
     doing: status === 'done' ? 'Finished' : 'Failed',
@@ -530,6 +531,63 @@ function finishRun(a: AgentRun, at: number, status: 'done' | 'failed', text: str
     // A finished row keeps the newest Log lines entries, its end among them (A1).
     log: logPush(closeAll(logOf(a), at, outcome), logEntry(at, 'end', text, outcome, ms)).slice(-finishedLines()),
   }
+}
+
+// The end line the 15-minute rule's close adds.
+const LOST_TEXT = 'Stopped: no longer listed'
+
+// The row without the mark of the 15-minute rule's close; the same row when it has none.
+function unmarked(a: AgentRun): AgentRun {
+  if (a.lost === undefined) return a
+  const out = { ...a }
+  delete out.lost
+  return out
+}
+
+// The close of A3: the row failed as `finishRun` fails it, but with its whole log (the open
+// entries closed as `error`, the end line added, nothing cut) and a mark that keeps what the
+// close overwrites, so that `reopened` can put it back (C1, C2). The mark names each entry
+// that was open by its distance from the end of the log, which a cut at the front leaves alone.
+function closeLost(a: AgentRun, at: number): AgentRun {
+  const log = logOf(a)
+  const open: number[] = []
+  log.forEach((x, i) => {
+    if (x.outcome === 'open') open.push(log.length - i)
+  })
+  return {
+    ...a,
+    status: 'failed',
+    endedAt: at,
+    doing: 'Failed',
+    doingSince: at,
+    log: [...closeAll(log, at, 'error'), logEntry(at, 'end', LOST_TEXT, 'error', Math.max(0, at - a.startedAt))],
+    lost: { status: a.status === 'waiting' ? 'waiting' : 'running', doing: a.doing, doingSince: a.doingSince, open },
+  }
+}
+
+// What an agent's event does first to a row the 15-minute rule closed (C3, C4): the close
+// undone, as if the row had never been closed. The status, the doing line and its time are
+// back; the end line is out of the log and each entry the close closed is open again (one a
+// cut has taken from the log is skipped); the mark is gone; and the row is quiet no more
+// from `at`, the time of the event (C7). The same row when it bears no mark.
+function reopened(a: AgentRun, at: number): AgentRun {
+  const mark = a.lost
+  if (!mark) return a
+  let log = logOf(a)
+  const tail = log.at(-1)
+  // The close left its end line last, and nothing wrote to the row since; only then do the distances hold.
+  if (tail && tail.kind === 'end' && tail.text === LOST_TEXT && tail.at === a.endedAt) {
+    log = log.slice(0, -1)
+    for (const back of Array.isArray(mark.open) ? mark.open : []) {
+      const i = log.length - back
+      const closed = log[i]
+      if (i < 0 || !closed || closed.outcome !== 'error') continue
+      const entry: LogEntry = { ...closed, outcome: 'open' }
+      delete entry.ms
+      log = log.map((x, j) => (j === i ? entry : x))
+    }
+  }
+  return { ...unmarked(a), status: mark.status, endedAt: undefined, doing: mark.doing, doingSince: mark.doingSince, activeAt: at, log }
 }
 
 function endText(reason: string, ms: number, actions?: number): [string, LogOutcome] {
@@ -700,6 +758,23 @@ async function updateRun($: EngineInterface, agentId: string, change: (a: AgentR
     })
     return isChanged ? next : list
   })
+  return isFound
+}
+
+// An agent's event changes its row: a row the 15-minute rule closed is reopened first (C3),
+// then `change` makes the event's own change, as to a row never closed. After a reopen the
+// main agent follows its subagents again and the run's mark is taken afresh, as after a
+// subagent's end (C5, C6).
+async function updateAgent($: EngineInterface, agentId: string, at: number, change: (a: AgentRun) => AgentRun): Promise<boolean> {
+  let isReopened = false
+  const isFound = await updateRun($, agentId, a => {
+    isReopened = a.lost !== undefined
+    return change(reopened(a, at))
+  })
+  if (isFound && isReopened) {
+    await settleMain($)
+    await holdFill($, at)
+  }
   return isFound
 }
 
@@ -1784,12 +1859,12 @@ async function syncAgents($: EngineInterface): Promise<void> {
       if (!isActive(a)) return a
       const s = a.agentId === undefined ? undefined : status.get(a.agentId)
       if (s === undefined) {
-        // A3: quiet for STUCK_MS and not listed (or never given an id): its end was missed.
-        // It comes back to `running` at its next step.
-        if (!isStuck(a, at)) return a
+        // A3: quiet for STUCK_MS (12 hours when it waits for approval) and not listed (or never
+        // given an id): its end was missed. Its agent's next event reopens it (C3).
+        if (!isLost(a, at)) return a
         hasEnded = true
         isChanged = true
-        return finishRun(a, at, 'failed', 'Stopped: no longer listed')
+        return closeLost(a, at)
       }
       if (s === 'completed' || s === 'failed' || s === 'killed') {
         hasEnded = true
@@ -2058,7 +2133,7 @@ async function onStep($: EngineInterface, e: In<'tool.call'>) {
   const at = await $.clock.now()
   // A re-plan to more steps lowers the agent's own part: the mark taken first keeps the bar where it was.
   await holdFill($, at)
-  const isFound = await updateRun($, agentId, a => {
+  const isFound = await updateAgent($, agentId, at, a => {
     const total = Math.max(0, Math.round(fin(input.total) ?? a.stepTotal ?? 0))
     const counted = Math.max(0, Math.round(fin(input.done) ?? a.stepDone ?? 0))
     const done = total ? Math.min(total, counted) : counted
@@ -2106,7 +2181,7 @@ async function startTool($: EngineInterface, agentId: string | undefined, label:
     const held = takeStream()
     await put($, mainState, m => ({ ...m, status: m.turnStartedAt !== null ? 'working' : m.status, doing: label, doingSince: at, log: logPush(withRows(logOf(m), held), open) }))
   } else {
-    await updateRun($, agentId, a => ({ ...a, status: a.status === 'waiting' ? 'running' : a.status, doing: label, doingSince: at, log: logPush(logOf(a), open) }))
+    await updateAgent($, agentId, at, a => ({ ...a, status: a.status === 'waiting' ? 'running' : a.status, doing: label, doingSince: at, log: logPush(logOf(a), open) }))
   }
 }
 
@@ -2120,7 +2195,8 @@ async function endTool($: EngineInterface, agentId: string | undefined, outcome:
       log: closeLog(logOf(m), at, outcome, callId),
     }))
   } else {
-    await updateRun($, agentId, a => ({ ...a, status: a.status === 'waiting' ? 'running' : a.status, doing: unwait(a.doing), activeAt: at, log: closeLog(logOf(a), at, outcome, callId) }))
+    // A call open at the close is open again once the row is reopened, so its real end closes it.
+    await updateAgent($, agentId, at, a => ({ ...a, status: a.status === 'waiting' ? 'running' : a.status, doing: unwait(a.doing), activeAt: at, log: closeLog(logOf(a), at, outcome, callId) }))
   }
 }
 
@@ -2155,7 +2231,7 @@ async function onPermissionRequest($: EngineInterface, e: In<'classic.Permission
     const doing = `${APPROVAL}${label}`
     const at = await $.clock.now()
     const waitRow = logEntry(at, 'wait', doing)
-    if (e.agent_id !== undefined) await updateRun($, e.agent_id, a => ({ ...a, status: 'waiting', doing, doingSince: at, log: logPush(logOf(a), waitRow) }))
+    if (e.agent_id !== undefined) await updateAgent($, e.agent_id, at, a => ({ ...a, status: 'waiting', doing, doingSince: at, log: logPush(logOf(a), waitRow) }))
     else {
       const held = takeStream()
       await put($, mainState, (m): MainRun => ({ ...m, status: 'waiting', doing, doingSince: at, log: logPush(withRows(logOf(m), held), waitRow) }))
@@ -2192,7 +2268,7 @@ async function addRun($: EngineInterface, e: In<'agent.spawn'>, agentId: string 
     if (known) {
       // A resumed agent keeps its row, its tokens and its log.
       return list.map(a =>
-        a === known ? { ...a, status: 'running', endedAt: undefined, doing: 'Getting started', doingSince: at, log: logPush(logOf(a), logEntry(at, 'note', 'Resumed')) } : a,
+        a === known ? { ...unmarked(a), status: 'running', endedAt: undefined, doing: 'Getting started', doingSince: at, log: logPush(logOf(a), logEntry(at, 'note', 'Resumed')) } : a,
       )
     }
     const round = 1 + (description ? list.filter(a => norm(a.description) === norm(description)).length : 0)
@@ -2285,7 +2361,7 @@ async function onTurnStart($: EngineInterface, e: In<'turn.start'>, next: NextOf
   try {
     const at = await $.clock.now()
     if (e.agentId !== undefined) {
-      await updateRun($, e.agentId, a => (a.status === 'running' ? a : { ...a, status: 'running', endedAt: undefined, doing: unwait(a.doing), doingSince: at }))
+      await updateAgent($, e.agentId, at, a => (a.status === 'running' ? a : { ...a, status: 'running', endedAt: undefined, doing: unwait(a.doing), doingSince: at }))
     } else {
       live.turnActions = 0
       const prompt = clip(printable(e.text), 60)
@@ -2473,7 +2549,7 @@ async function* onTurnStep($: EngineInterface, e: In<'turn.step'>, next: NextOf<
     try {
       const agentId = e.agentId
       const at = await $.clock.now()
-      await updateRun($, agentId, a => ({ ...stepRun(a, e, result.usage), activeAt: at }))
+      await updateAgent($, agentId, at, a => ({ ...stepRun(a, e, result.usage), activeAt: at }))
     } catch {
       // That step's tokens go uncounted on the row.
     }
@@ -2511,7 +2587,9 @@ async function* onTurnStep($: EngineInterface, e: In<'turn.step'>, next: NextOf<
 
 async function endRun($: EngineInterface, e: In<'turn.complete'>, agentId: string): Promise<void> {
   const at = await $.clock.now()
-  await updateRun($, agentId, a => {
+  await updateRun($, agentId, row => {
+    // A row the 15-minute rule closed is reopened first, then ended as a live row ends (C3).
+    const a = reopened(row, at)
     const ms = Math.max(0, at - a.startedAt)
     const status = e.reason === 'answer' ? 'done' : 'failed'
     const [text] = endText(e.reason, ms)

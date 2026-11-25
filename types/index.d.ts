@@ -95,6 +95,19 @@ export type LogEntry = {
 
 export type RunStatus = 'running' | 'waiting' | 'done' | 'failed'
 
+/**
+ * The mark of a row the 15-minute rule closed: the status, the doing line and its time as
+ * they were before the close, and which log entries it closed (never a copy of the log).
+ */
+export type Lost = {
+  /** The status before the close: `waiting` for a row that waited for approval. */
+  status: 'running' | 'waiting'
+  doing: string
+  doingSince: number
+  /** The entries that were open at the close, each as its distance from the end of the log before the end line was added (1 is the last entry), so a cut at the front moves none of them. */
+  open: number[]
+}
+
 export type AgentRun = {
   id: string
   agentId?: string
@@ -125,6 +138,8 @@ export type AgentRun = {
   stepAt?: number
   /** When its last model request or tool call ended; with `doingSince`, `stepAt` and the log, how long it has been quiet. */
   activeAt?: number
+  /** Set only on a row the 15-minute rule closed (A3): what that close overwrote, so the agent's next event puts it back. Any other end leaves none. */
+  lost?: Lost
   /** What it is doing now, one line. */
   doing: string
   doingSince: number

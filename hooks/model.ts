@@ -1574,6 +1574,22 @@ export function lastActiveOf(a: AgentRun): number {
 /** Active, but quiet for `STUCK_MS`: its end was most likely missed. The list still shows it. */
 export const isStuck = (a: AgentRun, now: number): boolean => isActiveRun(a) && Number.isFinite(now) && now - lastActiveOf(a) >= STUCK_MS
 
+/** What a row says while it waits for the person's approval; only a permission request sets it. */
+export const APPROVAL = 'Waiting for your approval: '
+/** A row that waits for approval is spared the 15-minute rule until it has been quiet this long. */
+export const WAIT_STUCK_MS = 12 * 60 * 60_000
+
+/**
+ * Active and quiet for `STUCK_MS`, or for `WAIT_STUCK_MS` when it waits for approval
+ * (`waiting`, its line starting `APPROVAL`): the sync closes such a row when its agent is
+ * not listed. The run still counts a row quiet for `STUCK_MS` as over (`isStuck`).
+ */
+export function isLost(a: AgentRun, now: number): boolean {
+  if (!isActiveRun(a) || !Number.isFinite(now)) return false
+  const isApproval = a.status === 'waiting' && typeof a.doing === 'string' && a.doing.startsWith(APPROVAL)
+  return now - lastActiveOf(a) >= (isApproval ? WAIT_STUCK_MS : STUCK_MS)
+}
+
 /** Active and not stuck: what a run waits for. */
 export const isLive = (a: AgentRun, now: number): boolean => isActiveRun(a) && !isStuck(a, now)
 
@@ -1639,12 +1655,12 @@ export function runCounts(run: Run | null, list: AgentRun[], now: number): RunCo
   return { n: ids.length, d: ids.length - live.length, live, title: lead ? lead.description || lead.type || '' : '' }
 }
 
-/** The run's agents active but stuck, and those live, by id. */
+/** The run's agents active but stuck, and those live, by id. A row the 15-minute rule closed (it bears the mark) counts stuck until its agent's next event reopens it. */
 export function runQuiet(run: Run | null, list: AgentRun[], now: number): { stuck: string[]; live: string[] } {
   const ids = run && Array.isArray(run.ids) ? run.ids : []
   const rows = new Map((Array.isArray(list) ? list : []).map(a => [a.id, a]))
   const mine = ids.map(id => rows.get(id)).filter((a): a is AgentRun => a !== undefined)
-  return { stuck: mine.filter(a => isStuck(a, now)).map(a => a.id), live: mine.filter(a => isLive(a, now)).map(a => a.id) }
+  return { stuck: mine.filter(a => isStuck(a, now) || a.lost !== undefined).map(a => a.id), live: mine.filter(a => isLive(a, now)).map(a => a.id) }
 }
 
 /** The run's fill: the agents over, plus how far each live one has got, over all of them. */
