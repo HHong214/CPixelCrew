@@ -1,6 +1,6 @@
 {
   "name": "CPixelCrew",
-  "version": "2.4.0",
+  "version": "2.5.0",
   "description": "CPixelCrew: a visual mod, a live agents panel that draws every subagent as a themed pixel mascot dressed for the kind of work it does, and a combined progress and usage bar above the prompt. It works on its own, and any orchestrator can report a plan to it.",
   "author": { "name": "HHong214" },
   "license": "MIT",

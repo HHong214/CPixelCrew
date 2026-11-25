@@ -1,5 +1,31 @@
 # Changelog
 
+## 2.5.0 (2026-11-25)
+
+### Fixed
+
+- The app lagged and its memory grew during a long session. In 2.4.0 every moving row was sent to the app as a new picture every second, and the pane and the bar were redrawn on every change. Now pictures keep their bytes, and the pane and the bar are redrawn only when what they show changes.
+- The list of agents could grow without limit, and past a point nothing more could be saved. Its stored size is now kept under one million characters: finished rows' logs are shortened first, then the oldest finished rows are retired into the session totals, which do not go down.
+- A row whose end the app never reported stayed active for the rest of the session and kept the panel redrawing every second. An agent the app no longer lists is now closed as failed after 15 quiet minutes, with the log line `Stopped: no longer listed`.
+- While idle with the cache pill on, the pane and the bar were redrawn every second for an hour after each reply. Idle now costs one redraw a minute at most.
+- A `progress` call with an empty `tasks` list no longer wipes the plan, a plan title that holds `|` no longer reopens the panel at every planned agent, and a title cut at an emoji no longer leaves half of it.
+
+### Changed
+
+- Times count in minutes: every ten seconds under a minute (`0s`, `10s` to `50s`), then whole minutes (`1m` to `59m`), then hours and minutes (`1h 02m`). This covers a row's elapsed time, the main agent's worked time and the session card's Time and worked figures.
+- The dot of a working row is steady; it no longer pulses.
+- The cache pill counts in whole minutes (`52m`) until five are left, then in minutes and seconds.
+- A finished row, the resting main mascot and the finished bar hold still a minute after they finish: from then on they carry no animation.
+- The idle pane's times (`last turn 5m ago`, the session card) count on once a minute.
+- Rows no longer animate in.
+- A row is now two pictures, the mascot and its text, and both count against the pane's size budget, so a page may hold a row or two fewer.
+- A finished row's log keeps the newest Log lines; a live row's, and the main agent's, keeps at most 200.
+- The bar's progress row is rebuilt at most every ten seconds while a plan or a run is running, and its fill glides over those ten seconds. At most four groups of its dots twinkle.
+
+### Known limits
+
+- A row closed by the 15-minute rule can read "Failed" while its agent works again. A workflow's agent that waits at a dialog for 15 minutes is closed by the same rule.
+
 ## 2.4.0
 
 ### Changed
