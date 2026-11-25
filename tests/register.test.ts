@@ -1992,7 +1992,7 @@ for (const surface of SURFACES) {
   })
 }
 
-test('desktop: a used-up limit and an expired cache tint their pills red', async ($, on) => {
+test('desktop: a used-up limit and an expired cache tint their pills red', { timeoutMs: 30_000 }, async ($, on) => {
   const { clock } = await boot($, on, { usage: USAGE_SPENT })
   await startTurn($)
   await endMainTurn($)

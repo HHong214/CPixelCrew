@@ -223,7 +223,7 @@ type Way = {
 }
 
 // Declares a scenario twice: its twin (the agent listed as `running`), then the scenario.
-function bothWays(name: string, body: (x: Way) => Promise<void>, o: { junk?: Record<string, unknown> } = {}): void {
+function bothWays(name: string, body: (x: Way) => Promise<void>, o: { junk?: Record<string, unknown>; noMain?: boolean } = {}): void {
   for (const isTwin of [true, false]) {
     test(isTwin ? `${name} [twin: listed as running]` : name, { timeoutMs: 90_000 }, async ($, on) => {
       const w = await boot($, on, o)
@@ -254,7 +254,7 @@ function bothWays(name: string, body: (x: Way) => Promise<void>, o: { junk?: Rec
           expect(seen.row.endedAt).toBe(ref.row.endedAt)
           expect(seen.row.log).toEqual(ref.row.log)
           expect(seen.row).toEqual(ref.row)
-          expect(seen.main).toEqual(ref.main)
+          if (!o.noMain) expect(seen.main).toEqual(ref.main)
         },
       })
       // Every moment the twin recorded was compared.
@@ -507,7 +507,7 @@ bothWays(
     await x.same('ended')
     expect(rowOf(w)?.log.find(e => e.callId === 'tu-long')?.outcome).toBe('ok')
   },
-  { junk: { agents: [STORED_ROW] } },
+  { junk: { agents: [STORED_ROW] }, noMain: true }, // The stored state holds no main agent that was ever settled, so its twin's stays blank: C5 has its own test.
 )
 
 // ---------------------------------------------------------------------------
