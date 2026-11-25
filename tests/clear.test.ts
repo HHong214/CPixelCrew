@@ -517,3 +517,36 @@ test('A5: a run that ended is null after a clear, though a row of it is kept', {
   expect(heldOf<AgentRun[]>(w, 'agents').map(a => `${a.id} ${a.status}`)).toEqual(['a1 running'])
   expect(heldOf(w, 'run')).toBeNull()
 })
+
+// ---------------------------------------------------------------------------
+// A5 and A11: a stored run of an unexpected shape (an older version's) must not stop the reset.
+
+const JUNK_RUNS = [
+  { name: 'no ids at all', run: { startedAt: T0, high: 0.5 } },
+  { name: 'ids is a string', run: { startedAt: T0, ids: 'a1,a2', high: 0.5 } },
+] as const
+
+for (const { name, run } of JUNK_RUNS) {
+  test(`A5, A11: a stored run with ${name} does not stop the reset the clear makes`, { timeoutMs: 60_000 }, async ($, on) => {
+    // The mod's `run` and `view` read so at load, until the mod writes them; the view has an open log.
+    const w = await boot($, on, T0, { junk: { run, view: { openLogs: ['a2'] } } })
+    // No prompt: a prompt would end the stored run (`endedAt`), and the reset's step for `run` returns early for an ended one.
+    await $.tool.call({ tool: PROGRESS, title: 'Second plan', phase: 'delegate', tasks: [{ title: 'Write the parser', kind: 'build' }] } as never)
+    await w.clock.settle()
+    await w.clock.advance(T - w.clock.now())
+    await w.clock.settle()
+    // What the mod holds: its last write; with none, what `boot` hands it (a hand-made value reads so until the mod writes that key).
+    const stored = (key: string, handed: unknown): unknown => (w.held.has(key) ? w.held.get(key) : handed)
+    // Set-up: the mod never wrote `run`, so the junk is what it reads and holds; a plan is reported; the log is open.
+    expect(w.held.has('run')).toBe(false)
+    expect(stored('flow', null)).toMatchObject({ title: 'Second plan' })
+    expect((stored('view', { openLogs: ['a2'] }) as View).openLogs).toEqual(['a2'])
+    await clear($, w)
+    // The run's step is the reset's third write; every value after it has to be put back too.
+    expect(stored('run', run)).toBeNull()
+    expect(stored('flow', null)).toBeNull()
+    expect(stored('usage', null)).toEqual(twin().usage)
+    expect((stored('view', { openLogs: ['a2'] }) as View).openLogs).toEqual([])
+    expect(stored('main', null)).toEqual(twin().main)
+  })
+}
