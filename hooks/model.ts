@@ -1240,6 +1240,20 @@ export function fmtTime(ms: number): string {
   return h ? `${h}:${pad(m)}:${pad(s % 60)}` : `${m}:${pad(s % 60)}`
 }
 
+/**
+ * A time that counts up while it is on show (2.5.0, B1): under a minute in steps of ten
+ * seconds (`0s`, `10s` to `50s`), then whole minutes (`1m` to `59m`), then hours and minutes
+ * (`1h 02m`). It changes at most once every ten seconds, so a picture that shows it stays
+ * the same between steps. A length written once (`Finished in 12s`) keeps `fmtTime`.
+ */
+export function fmtStep(ms: number): string {
+  const s = Math.floor(Math.max(0, num(ms) ?? 0) / 1000)
+  if (s < 60) return `${Math.floor(s / 10) * 10}s`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m`
+  return `${Math.floor(m / 60)}h ${pad(m % 60)}m`
+}
+
 // The two largest units, for countdowns: `3d 19h`, `1h 07m`, `42m`, `50s`.
 export function fmtSpan(ms: number): string {
   const s = seconds(ms)
@@ -1335,7 +1349,7 @@ export function normalizeView(raw: unknown): View {
 // schema is advice to the model, not a check, so what a call may draw is bounded here.
 
 const PHASES: readonly Phase[] = ['research', 'ask', 'plan', 'design', 'delegate', 'review', 'close']
-const MAX_TASKS = 200
+export const MAX_TASKS = 200
 const MAX_AFTER = 20
 const MAX_TITLE = 120
 const MAX_MODEL = 40
@@ -1667,7 +1681,7 @@ export function runFlow(run: Run | null, list: AgentRun[], now: number): Flow | 
  * task does not flip the bar mid-flow), or finished and reported (or settled) during the
  * current run (the last one, ended or not). Otherwise the run is shown.
  */
-export function planApplies(flow: Flow | null, run: Run | null, now: number, list: AgentRun[] = []): boolean {
+export function planApplies(flow: Flow | null, run: Run | null, now: number, list: AgentRun[] = [], turnAt: number | null = null): boolean {
   if (!isRecord(flow)) return false
   const at = num(flow.reportedAt)
   if (at === undefined) return false
@@ -1676,7 +1690,9 @@ export function planApplies(flow: Flow | null, run: Run | null, now: number, lis
     const titles = new Set((Array.isArray(flow.tasks) ? flow.tasks : []).map(t => norm(String(t?.title ?? ''))))
     return (Array.isArray(list) ? list : []).some(a => isActiveRun(a) && titles.has(norm(String(a.description ?? ''))))
   }
-  return isRecord(run) && at >= (num(run.startedAt) ?? Infinity)
+  // Finished: shown when reported during the current run, or during the main agent's turn
+  // still under way when no agent has joined a run (`turnAt`, when that turn started).
+  return (isRecord(run) && at >= (num(run.startedAt) ?? Infinity)) || (!isRecord(run) && at >= (num(turnAt) ?? Infinity))
 }
 
 /** What the bar and the main row show: the plan, the run, or nothing. `key` names what the fill is measured against; `crew` is the `×N`. */
@@ -1688,8 +1704,8 @@ export function planKey(flow: Flow): string {
   return at !== undefined ? `plan@${at}` : `plan:${norm(String(flow?.title ?? ''))}:${num(flow?.total) ?? 0}`
 }
 
-export function barView(flow: Flow | null, run: Run | null, list: AgentRun[], now: number): BarView {
-  if (flow && planApplies(flow, run, now, list)) return { flow, isPlan: true, key: planKey(flow), crew: list.length + plannedOf(flow, list).length }
+export function barView(flow: Flow | null, run: Run | null, list: AgentRun[], now: number, turnAt: number | null = null): BarView {
+  if (flow && planApplies(flow, run, now, list, turnAt)) return { flow, isPlan: true, key: planKey(flow), crew: list.length + plannedOf(flow, list).length }
   const f = runFlow(run, list, now)
   return f ? { flow: f, isPlan: false, key: `run:${f.total}`, crew: f.total } : { flow: null, isPlan: false, key: '', crew: 0 }
 }
@@ -1720,12 +1736,12 @@ export function heldRun(run: Run, key: string, fill: number, quiet?: { stuck: st
 }
 
 /**
- * One second of creep for the bar: from the fill shown now (never under the high-water
- * mark) to where it will be a second on, and how far into that second the clock is.
+ * The bar's creep over one glide (ten seconds, B5): from the fill shown now (never under
+ * the high-water mark) to where it will be when the glide ends.
  */
-export function creepSpan(high: number, now: number, later: number, intoMs: number): { start: number; target: number; delayMs: number } {
+export function creepSpan(high: number, now: number, later: number): { start: number; target: number } {
   const start = clamp(Math.max(num(high) ?? 0, num(now) ?? 0), 0, 1)
-  return { start, target: clamp(Math.max(start, num(later) ?? 0), 0, 1), delayMs: Math.round(clamp(num(intoMs) ?? 0, 0, 1_000)) }
+  return { start, target: clamp(Math.max(start, num(later) ?? 0), 0, 1) }
 }
 
 // ---------------------------------------------------------------------------

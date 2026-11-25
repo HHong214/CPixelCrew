@@ -262,14 +262,38 @@ export type FrameSnap = {
   at: number
   running: number
   state: 'none' | 'running' | 'paused' | 'done'
+  /**
+   * 2.5.0, slice B: each mascot of the pane by its row's id (`main`, an agent row's id,
+   * `plan-<n>`): what it looks like, its `born` stamp and whether it holds still (B4, B10).
+   * Absent in the bar's frame.
+   */
+  looks?: Record<string, Look>
+  /** The bar's progress row as last rebuilt (B5, B10); null with no plan or run on show. */
+  hold?: Hold | null
 }
+
+/**
+ * A mascot's looks (theme, role, pose, colour, scale, card, compact or not, as one key), its
+ * `born` (its stamp, renewed once a working or waiting mascot is due) and `still`: a finished
+ * or resting mascot a minute after it finished or came to rest, drawn with no animation.
+ */
+export type Look = { key: string; born: number; still: boolean }
+
+/**
+ * The progress row as last rebuilt: `key` what it shows apart from its fill, `creep` the
+ * fill's glide, `stamp` when it was rebuilt, `still` once a finished row held still, and
+ * `doneAt` when its plan or run finished.
+ */
+export type Hold = { key: string; creep: { start: number; target: number; delayMs: number } | null; stamp: number; still: boolean; doneAt: number | null }
 
 /**
  * A frame: `snap`, the time its texts read (`clock`) and when it was composed (`madeAt`).
  * The bar's `clock` is rounded down to the whole minute while nothing works (to the second in
  * the cache's last five minutes, and once it expired), so every time it shows steps together;
- * the pane's is `snap.at`. A frame is written only when `snap` or `clock` changed; a site that
- * draws a frame composed more than a second ago asks for a fresh one.
+ * the pane's is `snap.at`, rounded down to the whole minute while nothing works (B11). A frame
+ * is written only when what its site shows changed: the pane's when a text it shows steps
+ * (B1), a mascot is born or holds still, or a value changed; never for `at` alone. A site
+ * draws its frame as written; at most once a second a draw asks for a fresh composition.
  */
 export type Frame = { snap: FrameSnap; clock: number; madeAt: number }
 

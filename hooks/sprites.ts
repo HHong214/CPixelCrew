@@ -819,6 +819,68 @@ export function spriteCss(theme: ThemeName): string {
   return theme === 'cat' ? CAT_CSS : CRAB_CSS
 }
 
+// The theme's rules for one mascot (2.5.0, B7): only those whose selectors its own role and
+// pose can match, and the keyframes they name. `still` (B10) also drops every animation, its
+// keyframes and the reduced-motion block, leaving the pose's resting frame. No `<style>` tags.
+const ROLE_SEL = /\.(?:ct|cw)-r-([a-z]+)/g
+const POSE_SEL = /\.(?:ct|cw)-(work|rest|wait|done|planned|ride)\b/g
+const rulesMemo = new Map<string, string>()
+
+const blocks = (css: string): { head: string; body: string }[] => {
+  const out: { head: string; body: string }[] = []
+  let i = 0
+  while (i < css.length) {
+    const open = css.indexOf('{', i)
+    if (open < 0) break
+    let depth = 1
+    let j = open + 1
+    while (j < css.length && depth > 0) {
+      if (css[j] === '{') depth += 1
+      else if (css[j] === '}') depth -= 1
+      j += 1
+    }
+    out.push({ head: css.slice(i, open).trim(), body: css.slice(open + 1, j - 1) })
+    i = j
+  }
+  return out
+}
+
+export function spriteRules(theme: ThemeName, role: string, pose: Pose, still = false): string {
+  const isCat = theme === 'cat'
+  const own = SPRITE_ROLES.includes(role) ? role : 'helper'
+  const known: string = POSES.includes(pose) ? pose : 'done'
+  const mine = !isCat && known === 'ride' ? 'work' : known
+  const key = `${isCat ? 'cat' : 'clawd'}|${own}|${mine}|${still ? 1 : 0}`
+  const memo = rulesMemo.get(key)
+  if (memo !== undefined) return memo
+  const fits = (sel: string): boolean => [...sel.matchAll(ROLE_SEL)].every(m => m[1] === own) && [...sel.matchAll(POSE_SEL)].every(m => m[1] === mine)
+  const frames = new Map<string, string>()
+  const walk = (css: string): string => {
+    let out = ''
+    for (const { head, body } of blocks(css)) {
+      if (head.startsWith('@keyframes')) {
+        if (!still) frames.set(head.slice(10).trim(), `${head}{${body}}`)
+      } else if (head.startsWith('@')) {
+        if (still && head.includes('prefers-reduced-motion')) continue
+        const inner = walk(body)
+        if (inner) out += `${head}{${inner}}`
+      } else {
+        const sels = head.split(',').map(s => s.trim()).filter(s => s && fits(s))
+        if (!sels.length) continue
+        const decls = still ? body.split(';').filter(d => d.trim() && !/^\s*animation/.test(d)).join(';') : body
+        if (decls.trim()) out += `${sels.join(',')}{${decls}}`
+      }
+    }
+    return out
+  }
+  const rules = walk(spriteCss(isCat ? 'cat' : 'clawd').replace(/<\/?style>/g, ''))
+  const used = [...frames].filter(([name]) => new RegExp(`animation:\\s*${name.replace(/[-]/g, '\\-')}\\b`).test(rules)).map(([, block]) => block)
+  const out = rules + used.join('')
+  if (rulesMemo.size > 256) rulesMemo.clear()
+  rulesMemo.set(key, out)
+  return out
+}
+
 const num = (n: number): string => String(Math.round(n * 1000) / 1000)
 
 // The body nests in one classed <g> inside the placed <g>, so CSS transforms

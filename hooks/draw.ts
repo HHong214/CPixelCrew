@@ -23,7 +23,9 @@ import {
   fitText,
   flowLabel,
   fmtClock,
+  MAX_TASKS,
   fmtSpan,
+  fmtStep,
   fmtTime,
   fmtTokens,
   limitGauges,
@@ -49,7 +51,7 @@ import {
   xml,
 } from './model'
 import type { Gauge, ModelFamily, Palette, PillKind, Planned, TaskState, Totals, UsageSplit } from './model'
-import { SPRITE_H, SPRITE_W, sprite, spriteCss } from './sprites'
+import { SPRITE_H, SPRITE_W, sprite, spriteRules } from './sprites'
 import type { Pose } from './sprites'
 
 export type { PillKind } from './model'
@@ -57,12 +59,21 @@ export type { PillKind } from './model'
 export type Drawing = { source: string; width: number; height: number; alt: string }
 /**
  * `enterAgeMs`: how long ago this drawing's entrance began; none is drawn once it is over.
- * `clock`: the time the drawing is made at. Only a drawing that changes every tick anyway
- * (a working or waiting row, the main row while anything works) sets its loops by it (see
- * `loopAnchors`); a still one ignores it, so it stays the same from one tick to the next.
+ * A row's two pictures never enter (2.5.0).
+ * `clock`: a row's mascot's `born` (2.5.0, B4): its stamp (`--pc-t`), which sets its loops
+ * (see `loopAnchors`). A row's text picture ignores it, so it changes only when its words do.
+ * `still` (B10): the mascot is drawn holding still, with no animation and no stamp.
  */
-export type Ctx = { W: number; now: number; settings: Settings; rates: Rates; tzOffsetMin?: number; enterAgeMs?: number; clock?: number }
-/** One second of the bar's fill moving on: from `start` to `target` (parts of the whole), `delayMs` into that second. */
+export type Ctx = { W: number; now: number; settings: Settings; rates: Rates; tzOffsetMin?: number; enterAgeMs?: number; clock?: number; still?: boolean }
+/**
+ * A row of the panel (2.5.0, B2): its mascot picture and its text picture, side by side, the
+ * text's x in the row being `mascot.width` plus its own. A stacked row (`over`) is its text
+ * picture, the whole row with its top-left corner left empty, and the mascot picture is laid
+ * over that corner: a text's x in the row is its own.
+ */
+/** `centred`: a side-by-side row whose two pictures the pane's layout centres against each other, as 2.4.0 centred its mascot. */
+export type Row = { mascot: Drawing; text: Drawing; over?: true; centred?: true }
+/** The bar's fill gliding on over `CREEP_MS` (ten seconds): from `start` to `target` (parts of the whole), `delayMs` into that glide. */
 export type Creep = { start: number; target: number; delayMs: number }
 
 export const FONT = "-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',sans-serif"
@@ -77,8 +88,6 @@ export const TONES = { calm: PALETTES.classic.calm, warn: PALETTES.classic.warn,
 const PANE_RULES = `
 .t{fill:#1f1f1f}.s{fill:#6b6b68}.m{fill:#85857f}.k{fill:#ecebe8}.ln{stroke:#e4e4e1}.ic{stroke:#6b6b68}.icf{fill:#6b6b68}.ica{fill:#1f1f1f;fill-opacity:.09}.rt{fill:#4a4a46}.hk{fill:#a3a39e}.chip{fill:#A9472A}
 @media (prefers-color-scheme: dark){.t{fill:#ececec}.s{fill:#a8a8a4}.m{fill:#8f8f8a}.k{fill:#2c2c2b}.ln{stroke:#333331}.ic{stroke:#a8a8a4}.icf{fill:#a8a8a4}.ica{fill:#ffffff;fill-opacity:.14}.rt{fill:#d6d6d2}.hk{fill:#8d8d88}.chip{fill:#F0A68C}}
-.live{animation:p 1.6s ease-in-out infinite}@keyframes p{50%{opacity:.3}}
-@media (prefers-reduced-motion: reduce){.live{animation:none}}
 `
 
 // Entrances: rows fade in with a 6px rise (the bar's expanded rows drop in instead);
@@ -195,8 +204,8 @@ const tspans = (runs: Run[]): string =>
     .join('')
 
 // ---------------------------------------------------------------------------
-// Loops set by the clock. A redraw starts every CSS animation over, and the bar and the
-// rows are redrawn every second while anything works. A drawing given the clock puts
+// Loops set by the clock. A redraw starts every CSS animation over, and a mascot or the
+// progress row is drawn anew whenever its stamp is renewed (B4, B5). A drawing given the clock puts
 // `--pc-t` (minus the time of day, in ms) on its root, and after its own rules sets each
 // looping animation's delay to that plus the delay it had: a redraw picks the loop up
 // where the clock says it is, as `entrance` does for the one-time motions.
@@ -258,22 +267,56 @@ export function loopAnchors(css: string): string {
   return anchors
 }
 
-type DocOpts = { theme?: ThemeName; rules?: string; kit?: Kit; clock?: number; hero?: boolean }
+// `theme` with `role` and `pose`: the drawing holds that one mascot, and carries only the sprite
+// rules it can match (B7); `still`, none of their motion (B10).
+type DocOpts = { theme?: ThemeName; role?: string; pose?: Pose; still?: boolean; rules?: string; kit?: Kit; clock?: number; hero?: boolean }
+
+const loopOf = (clock: number | undefined): number | undefined =>
+  Number.isFinite(clock) ? Math.round((((clock as number) % LOOP_DAY_MS) + LOOP_DAY_MS) % LOOP_DAY_MS) : undefined
 
 const doc = (W: number, H: number, body: string, alt: string, o: DocOpts = {}): Drawing => {
   const h = Math.round(clamp(H, 1, MAX_H))
   const kit = o.kit ?? NO_KIT
   const rules = (o.rules ?? PANE_RULES) + (o.hero ? HERO_RULES : '')
   const css = `<style>${rules}${kit.any ? ENTER_RULES : ''}</style>`
-  const sprites = o.theme ? spriteCss(o.theme) : ''
-  const loopT = Number.isFinite(o.clock) ? Math.round((((o.clock as number) % LOOP_DAY_MS) + LOOP_DAY_MS) % LOOP_DAY_MS) : undefined
-  const anchors = loopT === undefined ? '' : loopAnchors(rules) + (o.theme ? loopAnchors(sprites) : '')
+  const spriteCss = o.theme ? spriteRules(o.theme, o.role ?? 'main', o.pose ?? 'rest', o.still === true) : ''
+  const sprites = spriteCss ? `<style>${spriteCss}</style>` : ''
+  const loopT = o.still === true ? undefined : loopOf(o.clock)
+  const anchors = loopT === undefined ? '' : loopAnchors(rules) + (spriteCss ? loopAnchors(spriteCss) : '')
   return {
     source: `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${h}" viewBox="0 0 ${W} ${h}" font-family="${FONT}" xml:space="preserve" style="white-space:pre${loopT === undefined ? '' : `;--pc-t:-${loopT}ms`}">${css}${sprites}${anchors ? `<style>${anchors}</style>` : ''}${kit.root ? `<g${kit.root}>${body}</g>` : body}</svg>`,
     width: W,
     height: h,
     alt: oneLine(alt),
   }
+}
+
+// A row's mascot picture (B2, B4): the mascot (with its card) and nothing else, its source a
+// function of its looks and its stamp alone. One style block (the card's colours and the
+// sprite's own rules), and, stamped, one of loop anchors.
+const mascotDoc = (W: number, H: number, body: string, alt: string, o: { theme: ThemeName; role: string; pose: Pose; hero: boolean; clock?: number; still?: boolean }): Drawing => {
+  const w = Math.max(1, Math.round(fin(W, 1)))
+  const h = Math.round(clamp(H, 1, MAX_H))
+  const css = spriteRules(o.theme, o.role, o.pose, o.still === true)
+  const loopT = o.still === true ? undefined : loopOf(o.clock)
+  const anchors = loopT === undefined ? '' : loopAnchors(css)
+  return {
+    source: `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"${loopT === undefined ? '' : ` style="--pc-t:-${loopT}ms"`}><style>${o.hero ? HERO_RULES : ''}${css}</style>${anchors ? `<style>${anchors}</style>` : ''}${body}</svg>`,
+    width: w,
+    height: h,
+    alt: oneLine(alt),
+  }
+}
+
+// A row's text picture (B3): its words, marks and bars, and no animation, entrance or stamp.
+const textDoc = (W: number, H: number, body: string, alt: string): Drawing => doc(Math.max(1, Math.round(fin(W, 1))), H, body, alt)
+
+/** The hairline under a row of the panel: the same bytes for every row, stretched to the row's width by the pane. */
+export const HAIRLINE: Drawing = {
+  source: `<svg xmlns="http://www.w3.org/2000/svg" width="100" height="1" viewBox="0 0 100 1" preserveAspectRatio="none"><style>.ln{stroke:#e4e4e1}@media (prefers-color-scheme: dark){.ln{stroke:#333331}}</style><line class="ln" x1="0" y1="0.5" x2="100" y2="0.5"/></svg>`,
+  width: 100,
+  height: 1,
+  alt: 'Row divider',
 }
 
 const themeOf = (s: Settings | undefined): ThemeName => (s?.theme === 'cat' ? 'cat' : 'clawd')
@@ -358,16 +401,15 @@ const hourglass = (x: number, y: number, size: number, color: string, cls = ''):
   return `<g transform="translate(${r(x - 6 * k)},${r(y - 6.5 * k)}) scale(${r(k)})" fill="none"${paint} stroke-width="${r(1.6 / k)}" stroke-linejoin="round" stroke-linecap="round"><path d="M2.5 .5h7M2.5 12.5h7M3.5 .5c0 3 5 3.5 5 6s-5 3-5 6M8.5 .5c0 3-5 3.5-5 6s5 3 5 6"/></g>`
 }
 
-// Row status at the right edge: pulsing dot, hourglass, check, cross, or a clock for planned.
+// Row status at the right edge: a steady dot (B1: no pulse), hourglass, check, cross, or a clock for planned.
 const statusMark = (x: number, y: number, status: string, color: string): string => {
-  if (status === 'running') return `<circle class="live" cx="${r(x)}" cy="${r(y)}" r="3.5" fill="${color}"/>`
+  if (status === 'running') return `<circle cx="${r(x)}" cy="${r(y)}" r="3.5" fill="${color}"/>`
   if (status === 'waiting') return hourglass(x, y, 11, TONES.warn)
   if (status === 'done') return `<path d="M${r(x - 5)} ${r(y)}l3.5 3.5 6.5-7" fill="none" stroke="${TONES.calm}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>`
   if (status === 'failed') return `<path d="M${r(x - 4)} ${r(y - 4)}l8 8M${r(x + 4)} ${r(y - 4)}l-8 8" stroke="${TONES.alert}" stroke-width="1.8" stroke-linecap="round"/>`
   return `<circle cx="${r(x)}" cy="${r(y)}" r="5" fill="none" stroke="#9a9a96" stroke-width="1.4"/><path d="M${r(x)} ${r(y - 2.5)}v2.8l1.8 1.2" fill="none" stroke="#9a9a96" stroke-width="1.4" stroke-linecap="round"/>`
 }
 
-const hairline = (W: number, y: number): string => `<line class="ln" x1="0" y1="${r(y)}" x2="${W}" y2="${r(y)}"/>`
 
 // A colour handed in from outside goes into an attribute: only a hex colour is taken.
 const colorOf = (c: unknown, d: string): string => (typeof c === 'string' && /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(c.trim()) ? c.trim() : d)
@@ -386,7 +428,7 @@ const TRACK_INK = `.ftk{fill:#e4e4e2}.tk{fill:#b4b4b0}
 `
 
 // The dots twinkle in four out-of-phase groups with savvy-progress's durations; a finished
-// bar settles to a slow glow. Only the dots carry `t0`-`t3`, and nothing else animates them;
+// bar settles to a slow glow. Only the four groups of dots carry `t0`-`t3` (B6), and nothing else animates them;
 // reduced motion stops it. It does not follow `settings.animations`, which is for entrances.
 // A drawing made with the clock keeps the groups' phases across redraws (`loopAnchors`).
 const twinkleRules = (finished: boolean): string => `
@@ -399,12 +441,14 @@ const twinkleRules = (finished: boolean): string => `
 /** The style rules a flow track needs: its inks, and the twinkle when it twinkles. */
 const trackRules = (twinkle: boolean, finished: boolean): string => TRACK_INK + (twinkle ? twinkleRules(finished) : '')
 
-// The fill's second of creep: the dots, drawn up to where the fill will be, grow from
-// where it is (`--pc-s`, a part of their width) and the pill slides along (`--pc-x`).
-// `forwards` holds the end until the next redraw starts the next second from there.
+// The fill's glide between two rebuilds of the progress row (B5, ten seconds): the dots, drawn
+// up to where the fill will be, grow from where it is (`--pc-s`, a part of their width) and the
+// pill slides along (`--pc-x`). `forwards` holds the end until the next rebuild starts from there.
+/** How long the fill glides: the progress row is rebuilt at most this often while it runs. */
+export const CREEP_MS = 10_000
 const CREEP_RULES = `
-.pc-creep{transform-origin:left;transform-box:fill-box;animation:pc-creep 1000ms ease-out forwards}@keyframes pc-creep{from{transform:scaleX(var(--pc-s))}to{transform:none}}
-.pc-creep-x{animation:pc-creep-x 1000ms ease-out forwards}@keyframes pc-creep-x{from{transform:translateX(var(--pc-x))}to{transform:none}}
+.pc-creep{transform-origin:left;transform-box:fill-box;animation:pc-creep ${CREEP_MS}ms ease-out forwards}@keyframes pc-creep{from{transform:scaleX(var(--pc-s))}to{transform:none}}
+.pc-creep-x{animation:pc-creep-x ${CREEP_MS}ms ease-out forwards}@keyframes pc-creep-x{from{transform:translateX(var(--pc-x))}to{transform:none}}
 @media (prefers-reduced-motion: reduce){.pc-creep,.pc-creep-x{animation:none}}
 `
 
@@ -427,7 +471,7 @@ type TrackOpts = {
   grow?: Entrance
   /** The pill at the head, `size` its font size (11 in a 16px track): the first of `labels` that fits the track (the label, then the bare count), else nothing. */
   pill?: { labels: string[]; size: number }
-  /** Where the fill was a moment ago (a part of the whole, at most `ratio`): the dots grow from there to `ratio` over one second, `delayMs` into it. Nested inside the entrance wrapper. */
+  /** Where the fill was a moment ago (a part of the whole, at most `ratio`): the dots grow from there to `ratio` over `CREEP_MS` (ten seconds), `delayMs` into it. Nested inside the entrance wrapper. */
   creep?: { from: number; delayMs: number }
 }
 
@@ -442,20 +486,27 @@ const ditherTrack = (o: TrackOpts): { body: string; rules: string } => {
   const fillW = Math.round(w * ratio)
   const runW = Math.round(w * clamp(o.runningRatio, 0, 1))
   const total = Math.max(0, Math.round(fin(o.total)))
-  const cls = (n: number): string => (o.twinkle ? ` class="t${Math.floor(n * 4)}"` : '')
-  const dots: string[] = []
+  // B6: the dots of each twinkle group sit in one element that carries its class, so at most
+  // four elements animate; a faint dot joins its group with its own opacity.
+  const groups: string[][] = [[], [], [], []]
+  const put = (n: number, rect: string): void => {
+    groups[o.twinkle ? Math.min(3, Math.max(0, Math.floor(n * 4))) : 0]?.push(rect)
+  }
+  let dotCount = 0
   const cols = Math.floor(fillW / CELL)
   const rows = Math.floor(h / CELL)
   for (let c = 0; c < cols; c++) {
     const density = 0.35 + 0.6 * Math.pow(c / Math.max(1, cols), 1.2)
     for (let y = 0; y < rows; y++) {
-      if (noise(c, y) < density) dots.push(`<rect${cls(noise(y, c))} x="${c * CELL + 1}" y="${y * CELL + 1}" width="2" height="2"/>`)
+      if (noise(c, y) < density) {
+        put(noise(y, c), `<rect x="${c * CELL + 1}" y="${y * CELL + 1}" width="2" height="2"/>`)
+        dotCount += 1
+      }
     }
   }
-  const faint: string[] = []
   for (let c = cols; c < Math.floor(runW / CELL); c++) {
     for (let y = 0; y < rows; y++) {
-      if (noise(c + 7, y + 3) < 0.2) faint.push(`<rect${cls(noise(y + 5, c))} x="${c * CELL + 1}" y="${y * CELL + 1}" width="1.7" height="1.7"/>`)
+      if (noise(c + 7, y + 3) < 0.2) put(noise(y + 5, c), `<rect opacity="0.45" x="${c * CELL + 1}" y="${y * CELL + 1}" width="1.7" height="1.7"/>`)
     }
   }
   const ticks: string[] = []
@@ -465,8 +516,8 @@ const ditherTrack = (o: TrackOpts): { body: string; rules: string } => {
   }
   // Creeping: the dots up to `ratio` grow from `from`, and the pill slides from where it stood there.
   const from = o.creep ? clamp(fin(o.creep.from), 0, ratio) : ratio
-  const isCreeping = !!o.creep && dots.length > 0 && ratio > 0 && from < ratio
-  const delay = `animation-delay:-${Math.round(clamp(fin(o.creep?.delayMs), 0, 1000))}ms`
+  const isCreeping = !!o.creep && dotCount > 0 && ratio > 0 && from < ratio
+  const delay = `animation-delay:-${Math.round(clamp(fin(o.creep?.delayMs), 0, CREEP_MS))}ms`
   let pill = ''
   if (o.pill) {
     const k = clamp(fin(o.pill.size, 11), 6, 16) / 11
@@ -481,13 +532,13 @@ const ditherTrack = (o: TrackOpts): { body: string; rules: string } => {
       if (dx !== 0) pill = `<g class="pc-creep-x" style="--pc-x:${dx}px;${delay}">${pill}</g>`
     }
   }
-  const fill = `<g fill="${o.color}">${dots.join('')}</g>`
+  const inner = o.twinkle ? groups.map((g, n) => (g.length ? `<g class="t${n}">${g.join('')}</g>` : '')).join('') : (groups[0] ?? []).join('')
+  const fill = `<g fill="${o.color}">${inner}</g>`
   const id = `pc-${o.idKey}`
   const body = `<defs><clipPath id="${id}"><rect x="0" y="0" width="${w}" height="${h}" rx="${h / 2}"/></clipPath></defs>
 <rect class="ftk" width="${w}" height="${h}" rx="${h / 2}"/>
 <g clip-path="url(#${id})">
-<g${enterAttrs(o.grow ?? { className: '', style: '' })}>${isCreeping ? `<g class="pc-creep" style="--pc-s:${Math.round((from / ratio) * 1000) / 1000};${delay}">${fill}</g>` : fill}${faint.length ? `
-<g fill="${o.color}" opacity="0.45">${faint.join('')}</g>` : ''}</g>
+<g${enterAttrs(o.grow ?? { className: '', style: '' })}>${isCreeping ? `<g class="pc-creep" style="--pc-s:${Math.round((from / ratio) * 1000) / 1000};${delay}">${fill}</g>` : fill}</g>
 <g class="tk">${ticks.join('')}</g>
 </g>
 ${pill}`
@@ -599,30 +650,63 @@ const placeAll = (bs: Block[], x: number, y0: number): string => {
 
 type Build = (topW: number, restW: number) => { top: Block[]; rest: Block[] }
 
-// The mascot on the left and every block in the column beside it; when that column
-// would be under SIDE_MIN, only `top` stays beside it and `rest` runs full width below;
-// under BESIDE_MIN the mascot sits alone on top.
-const rowLayout = (W: number, sw: number, sh: number, pad: number, build: Build, drawMascot: (x: number, y: number) => string): { body: string; H: number } => {
+// A row as two pictures (B2): the mascot picture, `x0` wide (the mascot and the gap after it),
+// and the text picture beside it, the rest of the row, every block drawn from its own x = 0.
+// The mascot picture is the mascot's own size and margin, whatever the words beside it, so a
+// row's words never change its bytes (B4); where 2.4.0 centred the mascot against a taller
+// text, the pane's layout places the picture (`centred`). Where 2.4.0 ran the text under the
+// mascot (a column under SIDE_MIN), the row is stacked: see the last two layouts below.
+type Split = { mascot: { body: string; w: number; h: number }; text: { body: string; w: number; h: number }; over?: true; centred?: true }
+const rowSplit = (W: number, sw: number, sh: number, pad: number, build: Build, drawMascot: (x: number, y: number) => string): Split => {
   const R = W - 2
   const x0 = Math.round(sw + 10)
-  const col = R - x0
-  if (col >= SIDE_MIN) {
+  const col = Math.max(1, R - x0)
+  const tw = Math.max(1, W - x0)
+  if (R - x0 >= SIDE_MIN) {
     const { top, rest } = build(col, col)
     const all = [...top, ...rest]
     const H = Math.ceil(Math.max(pad * 2 + sumH(all), sh + 12))
-    const y = Math.min((H - sh) / 2, pad + 2)
-    return { body: drawMascot(0, Math.round(y)) + placeAll(all, x0, pad), H }
+    const text = { body: placeAll(all, 0, pad), w: tw, h: H }
+    // The mascot's place in its picture is 2.4.0's for the row without its words: the first
+    // block under the title (an agent's doing line and step, the main row's doing line) left
+    // out, so those words never move it (B4). Where 2.4.0 centred the mascot against the
+    // taller text the words make, the pane's layout centres the two pictures against each
+    // other (`centred`), which sets the mascot where 2.4.0 did.
+    const bare = Math.ceil(Math.max(pad * 2 + sumH(top) + sumH(rest.slice(1)), sh + 12))
+    const y = Math.round(Math.min((bare - sh) / 2, pad + 2))
+    const mascot = { body: drawMascot(0, y), w: x0, h: Math.min(bare, Math.ceil(sh + 2 * y)) }
+    const isCentred = H > bare && (H - sh) / 2 < pad + 2
+    return isCentred ? { mascot, text, centred: true } : { mascot, text }
   }
+  const mascot = { body: drawMascot(0, 6), w: x0, h: Math.ceil(sh + 12) }
+  // Stacked (the ruling of 2026-11-25): the text picture is the whole row, its top-left corner
+  // left empty, and the mascot picture is laid over that corner (`over`). Every text is where
+  // 2.4.0 drew it: `top` beside the mascot and `rest` under it across the row; alone, all of it under.
   if (col >= BESIDE_MIN) {
     const { top, rest } = build(col, R)
     const topH = Math.ceil(Math.max(pad + sumH(top), 6 + sh) + 6)
-    return { body: drawMascot(0, 6) + placeAll(top, x0, pad) + placeAll(rest, 0, topH), H: topH + sumH(rest) + pad }
+    return { mascot, text: { body: placeAll(top, x0, pad) + placeAll(rest, 0, topH), w: W, h: topH + sumH(rest) + pad }, over: true }
   }
   const { top, rest } = build(R, R)
   const y = Math.ceil(6 + sh + 6)
   const all = [...top, ...rest]
-  return { body: drawMascot(0, 6) + placeAll(all, 0, y), H: y + sumH(all) + pad }
+  return { mascot, text: { body: placeAll(all, 0, y), w: W, h: y + sumH(all) + pad }, over: true }
 }
+
+// Both pictures of a row: the text picture's alt is the row's; the mascot's names its looks.
+const rowOf = (W: number, split: Split, alt: string, m: { theme: ThemeName; role: string; pose: Pose; c: Ctx | undefined; label: string }, extraText = ''): Row => ({
+  mascot: mascotDoc(split.mascot.w, split.mascot.h, split.mascot.body, `${m.label} (${m.pose})`, {
+    theme: m.theme,
+    role: m.role,
+    pose: m.pose,
+    hero: heroOn(m.c?.settings),
+    clock: m.c?.clock,
+    still: m.c?.still,
+  }),
+  text: textDoc(split.text.w, split.text.h, split.text.body + extraText, alt),
+  ...(split.over ? { over: true as const } : {}),
+  ...(split.centred ? { centred: true as const } : {}),
+})
 
 // ---------------------------------------------------------------------------
 // Panel: the title and the session card.
@@ -729,11 +813,11 @@ const figuresStrip = (c: Ctx, d: CardData, W: number, y0: number): { body: strin
   const turnS = cost(turn, c, false)
   const u = t?.use
   const inAll = fin(u?.input) + fin(u?.cacheRead) + fin(u?.cacheWrite)
-  const worked = fmtTime(fin(d?.workedMs))
+  const worked = fmtStep(fin(d?.workedMs))
   const cells = [
     { label: 'Cost', value: cost(t?.costUsd, c, t?.isEstimate !== false), subs: Number.isFinite(turn as number) ? [`this turn +${turnS}`, `+${turnS} turn`, `+${turnS}`] : [] },
     { label: 'Tokens', value: fmtTokens(fin(t?.tokens)), subs: [inOut(u), `${fmtTokens(inAll)} in`] },
-    { label: 'Time', value: fmtTime(fin(t?.timeMs)), subs: Number.isFinite(d?.workedMs as number) ? [`worked ${worked}`, worked] : [] },
+    { label: 'Time', value: fmtStep(fin(t?.timeMs)), subs: Number.isFinite(d?.workedMs as number) ? [`worked ${worked}`, worked] : [] },
   ]
   const c3 = W / 3
   const room = Math.max(0, c3 - CELL_IN - 8)
@@ -1054,11 +1138,12 @@ export type SegState = 'done' | 'run' | 'wait' | 'plan'
 /**
  * The task strip's segments, one per task in order: the done ones first, then one per
  * agent running (only while the plan runs), then one per agent waiting, then the rest.
- * Done: every segment done. No plan, or none counted: no segments.
+ * Done: every segment done. No plan, or none counted: no segments. More tasks than a plan
+ * can hold (`MAX_TASKS`, a junk total): none either, so it never builds more entries (B9).
  */
 export function stripSegments(flow: Flow | null, state: TaskState, agentsRunning: number, agentsWaiting: number): SegState[] {
   const total = flow && state !== 'none' ? Math.max(0, Math.round(fin(flow.total))) : 0
-  if (!total) return []
+  if (!total || total > MAX_TASKS) return []
   const done = state === 'done' ? total : Math.min(total, Math.max(0, Math.round(fin(flow?.done))))
   const run = state === 'running' ? Math.min(total - done, Math.max(0, Math.round(fin(agentsRunning)))) : 0
   const wait = state === 'running' || state === 'paused' ? Math.min(total - done - run, Math.max(0, Math.round(fin(agentsWaiting)))) : 0
@@ -1085,8 +1170,10 @@ const taskStrip = (
   const hasPlan = !!flow && state !== 'none'
   const name = hasPlan ? (flow?.title ?? '') : ''
   const segs = stripSegments(flow, state, agentsRunning, agentsWaiting)
-  const total = segs.length
-  const doneN = segs.filter(s => s === 'done').length
+  // Past the cap on tasks there are no segments: the count is read from the plan itself.
+  const over = hasPlan && !segs.length ? Math.max(0, Math.round(fin(flow?.total))) : 0
+  const total = over > MAX_TASKS ? over : segs.length
+  const doneN = over > MAX_TASKS ? (state === 'done' ? total : Math.min(total, Math.max(0, Math.round(fin(flow?.done))))) : segs.filter(s => s === 'done').length
   const count = total ? `${doneN}/${total}` : ''
   const right: Part[] = hasPlan ? [{ s: count, cls: 't', weight: 600 }, { s: count ? ` · ${look.percent}` : look.percent, cls: 'm' }] : []
   // How far each running segment is filled: what the fill holds past the done ones, in turn.
@@ -1158,11 +1245,12 @@ const chipLook = (status: 'working' | 'waiting' | 'resting'): { rect: string; in
 // The main agent: a big mascot, name and status chip, model, what it does, figures and
 // its task strip. `fill`, when given, is how far the task strip is filled (the bar's own
 // fill); `agentsWaiting` marks as many waiting segments.
-export function mainDrawing(c: Ctx, main: MainRun, agentsRunning: number, usage: Usage, flow: Flow | null = null, fill?: number, agentsWaiting = 0): Drawing {
+export function mainDrawing(c: Ctx, main: MainRun, agentsRunning: number, usage: Usage, flow: Flow | null = null, fill?: number, agentsWaiting = 0): Row {
   const W = widthOf(c?.W)
   const now = fin(c?.now)
   const theme = themeOf(c?.settings)
-  const kit = kitOf(c?.enterAgeMs, c?.settings)
+  // A row's pictures never enter (B3, B4).
+  const kit = NO_KIT
   const k = MAIN_SCALE * iconK(c?.settings)
   const status = main?.status === 'working' || main?.status === 'waiting' ? main.status : 'resting'
   const pose: Pose = status === 'working' ? 'work' : status === 'waiting' ? 'wait' : 'rest'
@@ -1182,7 +1270,7 @@ export function mainDrawing(c: Ctx, main: MainRun, agentsRunning: number, usage:
         ? `Resting · last turn ${mins < 1 ? 'just now' : `${fmtSpan(mins * 60_000)} ago`}`
         : 'Resting'
       : str(main?.doing) || (status === 'working' ? 'Working' : 'Waiting')
-  const worked = fmtTime(mainWorkedMs({ ...main, workedMs: fin(main?.workedMs), turnStartedAt: Number.isFinite(main?.turnStartedAt as number) ? (main.turnStartedAt as number) : null }, now))
+  const worked = fmtStep(mainWorkedMs({ ...main, workedMs: fin(main?.workedMs), turnStartedAt: Number.isFinite(main?.turnStartedAt as number) ? (main.turnStartedAt as number) : null }, now))
   const spent = cost(main?.costUsd, c, true)
   const plan = flowSafe(flow)
   const strip = taskStrip(plan, taskState(plan, status === 'working', n), n, Math.max(0, Math.round(fin(agentsWaiting))), kit.grow, fill)
@@ -1232,14 +1320,10 @@ export function mainDrawing(c: Ctx, main: MainRun, agentsRunning: number, usage:
     }
   }
   const hs = heroSprite(c?.settings, theme, k, 'main', pose)
-  const { body, H } = rowLayout(W, hs.w, hs.h, MAIN_PAD, build, hs.draw)
+  const split = rowSplit(W, hs.w, hs.h, MAIN_PAD, build, hs.draw)
   const alt = `Claude, ${word}: ${doing}.${model ? ' ' + model + '.' : ''} ${stats}; ${strip.alt}${n ? `; ${crew} running` : ''}`
-  // Redrawn every tick while it or any agent works; resting, it holds still. A resting row
-  // whose minutes move is anchored to the moment its text last changed, so the mascot's
-  // loops go on where they were rather than restart with the new text.
-  const isMoving = status !== 'resting' || n > 0
-  const restAnchor = hasRested && Number.isFinite(c?.clock) ? fin(main?.doingSince, now) + mins * 60_000 : undefined
-  return doc(W, H, body, alt, { theme, kit, clock: isMoving ? c?.clock : restAnchor, hero: heroOn(c?.settings) })
+  // The mascot carries its `born` as its stamp (c.clock); the text, its words alone.
+  return rowOf(W, split, alt, { theme, role: 'main', pose, c, label: 'Claude' })
 }
 
 const runPose = (s: string): Pose => (s === 'running' ? 'work' : s === 'waiting' ? 'wait' : 'done')
@@ -1247,11 +1331,12 @@ const runPose = (s: string): Pose => (s === 'running' ? 'work' : s === 'waiting'
 // One subagent: description and status, kind and model, what it does (steps first),
 // tokens (`in` counts the cache) with cost and time, and while it works a thin bar of its
 // steps, or else of its context.
-export function agentDrawing(c: Ctx, a: AgentRun): Drawing {
+export function agentDrawing(c: Ctx, a: AgentRun): Row {
   const W = widthOf(c?.W)
   const now = fin(c?.now)
   const theme = themeOf(c?.settings)
-  const kit = kitOf(c?.enterAgeMs, c?.settings)
+  // A row's pictures never enter (B3, B4).
+  const kit = NO_KIT
   const k = ROW_SCALE * iconK(c?.settings)
   const own = agentColor(a ?? {})
   const costume = KINDS[agentKind(a ?? {})].sprite
@@ -1269,7 +1354,7 @@ export function agentDrawing(c: Ctx, a: AgentRun): Drawing {
   const doing = str(a?.doing)
   const progress = a ? progressOf({ ...a, stepTotal: stepTotal || undefined }) : null
   const ctx = ctxOf({ contextTokens: fin(a?.contextTokens), contextMax: fin(a?.contextMax) })
-  const time = fmtTime(a ? elapsed({ ...a, startedAt: fin(a.startedAt, now), endedAt: Number.isFinite(a.endedAt as number) ? a.endedAt : undefined }, now) : 0)
+  const time = fmtStep(a ? elapsed({ ...a, startedAt: fin(a.startedAt, now), endedAt: Number.isFinite(a.endedAt as number) ? a.endedAt : undefined }, now) : 0)
   const spent = cost(a?.costUsd, c, true)
   const figures = [inOut(a?.use), spent, time]
   const stats = figures.join(' · ')
@@ -1298,19 +1383,19 @@ export function agentDrawing(c: Ctx, a: AgentRun): Drawing {
       rest: [{ h: doingBlock.h + (doingBlock.h ? 1 : 0), draw: doingBlock.draw }, statsBlock, ...(isMoving ? [progressBar] : [])],
     }
   }
-  const hs = heroSprite(c?.settings, theme, k, costume, runPose(status), own)
-  const { body, H } = rowLayout(W, hs.w, hs.h, PAD, build, hs.draw)
+  const pose = runPose(status)
+  const hs = heroSprite(c?.settings, theme, k, costume, pose, own)
+  const split = rowSplit(W, hs.w, hs.h, PAD, build, hs.draw)
   const alt = `${label} agent, ${status}: ${title}.${doing ? ' ' + doing + '.' : ''}${steps ? ' Step ' + steps + '.' : ''} ${stats}`
-  // A working or waiting row is redrawn every tick (its clock runs); a finished one holds still.
-  return doc(W, H, body + hairline(W, H - 0.5), alt, { theme, kit, clock: isMoving ? c?.clock : undefined, hero: heroOn(c?.settings) })
+  // The hairline under the row is the pane's (`HAIRLINE`); the mascot carries its `born` stamp.
+  return rowOf(W, split, alt, { theme, role: costume, pose, c, label: `${label} agent` })
 }
 
 // A task the plan holds that no agent has started: dimmed mascot, number, title, kind,
 // and the model and effort it is planned for.
-export function plannedDrawing(c: Ctx, p: Planned): Drawing {
+export function plannedDrawing(c: Ctx, p: Planned): Row {
   const W = widthOf(c?.W)
   const theme = themeOf(c?.settings)
-  const kit = kitOf(c?.enterAgeMs, c?.settings)
   const k = ROW_SCALE * iconK(c?.settings)
   const kind = taskKind(p ?? {})
   const own = taskColor(p ?? {})
@@ -1327,8 +1412,9 @@ export function plannedDrawing(c: Ctx, p: Planned): Drawing {
     return { top: [head, richBlock([{ s: label, fill: own, weight: 600 }, { s: meta.length ? (label ? ' · ' : '') + meta.join(' · ') : '', cls: 'm' }], 11.5, 15, 14, topW, 2)], rest: [] }
   }
   const hs = heroSprite(c?.settings, theme, k, KINDS[kind].sprite, 'planned', own)
-  const { body, H } = rowLayout(W, hs.w, hs.h, PAD, build, hs.draw)
-  return doc(W, H, body + hairline(W, H - 0.5), `Planned: ${title}${label ? ', for ' + label : ''}${after.length ? ', after ' + after.join(', ') : ''}`, { theme, kit, hero: heroOn(c?.settings) })
+  const split = rowSplit(W, hs.w, hs.h, PAD, build, hs.draw)
+  const alt = `Planned: ${title}${label ? ', for ' + label : ''}${after.length ? ', after ' + after.join(', ') : ''}`
+  return rowOf(W, split, alt, { theme, role: KINDS[kind].sprite, pose: 'planned', c, label: `${label || 'Planned'} task` })
 }
 
 // ---------------------------------------------------------------------------
@@ -1363,7 +1449,7 @@ export function compactCardDrawing(c: Ctx, t: Totals, usage: Usage): Drawing {
   const turnS = cost(turn, c, false)
   const rights = Number.isFinite(turn as number) ? [`+${turnS} turn`, `+${turnS}`, ''] : ['']
   const pick = ((): [string, string] => {
-    for (const s of [`${tok} · ${fmtTime(fin(t?.timeMs))}`, tok, ''])
+    for (const s of [`${tok} · ${fmtStep(fin(t?.timeMs))}`, tok, ''])
       for (const rt of rights) if (vw + (s ? 8 + textWidth(s, 12) : 0) + (rt ? 12 + textWidth(rt, 11) : 0) <= inner) return [s, rt]
     return ['', '']
   })()
@@ -1391,20 +1477,19 @@ export function compactCardDrawing(c: Ctx, t: Totals, usage: Usage): Drawing {
       (barW >= 8 ? bar(cx, top + 50, barW, 3, resetting ? 0 : gaugeFrac(g), resetting ? MUTED : toneOf(pal, g.tone), kit.grow, { soft: true }) : '')
   })
   const cardH = n ? COMPACT_CARD_H : COMPACT_CARD_H1
-  const alt = `Session: ${vs}, ${tok} tokens, ${fmtTime(fin(t?.timeMs))}${n ? '; ' + gauges.map(x => gaugeWords(gaugeSafe(x.gauge))).join(', ') : ''}`
+  const alt = `Session: ${vs}, ${tok} tokens, ${fmtStep(fin(t?.timeMs))}${n ? '; ' + gauges.map(x => gaugeWords(gaugeSafe(x.gauge))).join(', ') : ''}`
   // No fill of its own: the pane lays the card on the bar's panel.
   return doc(W, top + cardH + CARD_BOTTOM, body, alt, { kit })
 }
 
-type LineSpec = { costume: string; pose: Pose; color?: string; title: string; metas: Part[][]; right: string; strong: boolean; mark: (x: number, y: number) => string; alt: string; isMoving: boolean }
+type LineSpec = { costume: string; pose: Pose; color?: string; title: string; metas: Part[][]; right: string; strong: boolean; mark: (x: number, y: number) => string; alt: string }
 
 // One compact line: the small mascot, the title, the kind and model (shortened, then
 // dropped, before the title is cut below its width or 64px), the step or tokens at the
 // right, 16px in from the status mark.
-const compactLine = (c: Ctx, o: LineSpec): Drawing => {
+const compactLine = (c: Ctx, o: LineSpec): Row => {
   const W = widthOf(c?.W)
   const theme = themeOf(c?.settings)
-  const kit = kitOf(c?.enterAgeMs, c?.settings)
   const k = COMPACT_SCALE * iconK(c?.settings)
   const hs = heroSprite(c?.settings, theme, k, o.costume, o.pose, o.color)
   const sw = hs.w
@@ -1422,16 +1507,21 @@ const compactLine = (c: Ctx, o: LineSpec): Drawing => {
   const meta = o.metas.find(m => !m.length || Math.min(tw0, end - x - metaW(m)) >= want) ?? []
   const title = fit(o.title, 12.5, end - x - metaW(meta))
   const line: Part[] = title ? [{ s: title, cls: 't', weight: 600 }, ...(meta.length ? [{ s: GAP }, ...meta.map(p => ({ ...p, size: 11.5 }))] : [])] : []
+  // Two pictures (B2): the mascot, `x` wide, and the line beside it, drawn from its own x = 0.
+  // The line's height is the mascot's own, so a line's words never change the mascot (B4).
+  const tw = Math.max(1, W - x)
   const body =
-    hs.draw(0, Math.round((H - sh) / 2)) +
-    rich(x, base, line, 12.5) +
-    text(W - 16, base, right, { cls: o.strong ? 't' : 's', size: 11.5, weight: o.strong ? 600 : undefined, anchor: 'end', num: true }) +
-    o.mark(W - 6, H / 2)
-  return doc(W, H, body, o.alt, { theme, kit, clock: o.isMoving ? c?.clock : undefined, hero: heroOn(c?.settings) })
+    rich(0, base, line, 12.5) +
+    text(W - 16 - x, base, right, { cls: o.strong ? 't' : 's', size: 11.5, weight: o.strong ? 600 : undefined, anchor: 'end', num: true }) +
+    o.mark(W - 6 - x, H / 2)
+  return {
+    mascot: mascotDoc(x, H, hs.draw(0, Math.round((H - sh) / 2)), `${o.title} (${o.pose})`, { theme, role: o.costume, pose: o.pose, hero: heroOn(c?.settings), clock: c?.clock, still: c?.still }),
+    text: textDoc(tw, H, body, o.alt),
+  }
 }
 
 /** The main agent's compact line: `Claude`, its status word and model, the plan's count at the right. */
-export function compactMainDrawing(c: Ctx, main: MainRun, flow: Flow | null, agentsRunning: number): Drawing {
+export function compactMainDrawing(c: Ctx, main: MainRun, flow: Flow | null, agentsRunning: number): Row {
   const status = main?.status === 'working' || main?.status === 'waiting' ? main.status : 'resting'
   const word = STATUS_WORD[status]
   const ink: Part = status === 'working' ? { s: word, cls: 'chip', weight: 600 } : status === 'waiting' ? { s: word, fill: TONES.warn, weight: 600 } : { s: word, cls: 'm', weight: 600 }
@@ -1449,12 +1539,11 @@ export function compactMainDrawing(c: Ctx, main: MainRun, flow: Flow | null, age
     strong: true,
     mark: () => '',
     alt: `Claude, ${word}${model ? ', ' + model : ''}${count ? `; tasks ${count}` : ''}`,
-    isMoving: status !== 'resting',
   })
 }
 
 /** One subagent's compact line: title, kind and model family, its step or its tokens, its status mark. */
-export function compactAgentDrawing(c: Ctx, a: AgentRun): Drawing {
+export function compactAgentDrawing(c: Ctx, a: AgentRun): Row {
   const own = agentColor(a ?? {})
   const status = a?.status ?? 'running'
   const color = status === 'running' ? workColor(c?.settings, a ?? {}) : own
@@ -1476,7 +1565,6 @@ export function compactAgentDrawing(c: Ctx, a: AgentRun): Drawing {
     strong: !!steps,
     mark: (mx, my) => statusMark(mx, my, status, color),
     alt: `${label} agent, ${status}: ${str(a?.description) || 'Agent'}; ${steps ? 'step ' + steps : right + ' tokens'}`,
-    isMoving: status === 'running' || status === 'waiting',
   })
 }
 
@@ -1660,7 +1748,7 @@ const idleProgress = (W: number, settings: Settings, agentsRunning: number, ente
 ${text(16, H / 2 + 4.5, title, { cls: 'm', size: 13, weight: 500 })}
 <rect class="k" x="${BAR_X}" y="${(H - TRACK_H) / 2}" width="${BAR_W}" height="${TRACK_H}" rx="${TRACK_H / 2}"/>
 ${mascot(theme, 'main', progressPose(theme, 'none'), mascotX, (H - SPRITE_H * HEAD_SCALE) / 2, HEAD_SCALE)}${text(countX, H / 2 + 4.5, '×0', { cls: 'm', size: 12, num: true })}`
-  return doc(W, H, body, `${NO_TASK_YET}; ${n ? `${n} agent${n === 1 ? '' : 's'}` : 'no agents'} running`, { theme, rules, kit })
+  return doc(W, H, body, `${NO_TASK_YET}; ${n ? `${n} agent${n === 1 ? '' : 's'}` : 'no agents'} running`, { theme, role: 'main', pose: progressPose(theme, 'none'), rules, kit })
 }
 
 /**
@@ -1674,10 +1762,10 @@ ${mascot(theme, 'main', progressPose(theme, 'none'), mascotX, (H - SPRITE_H * HE
  * - `done`: the done colour, `Done`, `100%`, the slow twinkle.
  * The mascot: the crab works while running, is done when done; the cat rides its broom
  * in both; both rest otherwise. `crew` is the `×N` count after the mascot.
- * `creep`: short of done, the fill moves from `start` to `target` over a second (the
- * percent says `start`), instead of standing at `done / total`. `clock` sets the loops
- * (the twinkle, the mascot) so a redraw does not start them over; only while running,
- * when the row changes every tick anyway: idle, paused and done rows hold still.
+ * `creep`: short of done, the fill glides from `start` to `target` over `CREEP_MS`, ten
+ * seconds (the percent says `start`), instead of standing at `done / total` (B5). `clock`, the time of the row's last rebuild, stamps it and sets its loops (the
+ * twinkle, the mascot) while running; idle, paused and done rows carry none. `still` (B10):
+ * a done row a minute on holds still: no twinkle, a still mascot, no animation at all.
  */
 export function progressDrawing(
   f: Flow | null,
@@ -1689,6 +1777,7 @@ export function progressDrawing(
   enterAgeMs?: number,
   creep?: Creep,
   clock?: number,
+  still?: boolean,
 ): Drawing {
   const W = widthOf(W_)
   const flow = flowSafe(f)
@@ -1696,8 +1785,9 @@ export function progressDrawing(
   if (flow === null || st === 'none') return idleProgress(W, settings, agentsRunning, enterAgeMs)
   const H = BAR_H
   const theme = themeOf(settings)
-  const kit = kitOf(enterAgeMs, settings, 'drop')
-  const moving = creep && st !== 'done' ? { start: clamp(fin(creep.start), 0, 1), target: clamp(fin(creep.target), 0, 1), delayMs: fin(creep.delayMs) } : null
+  const isStill = still === true && st === 'done'
+  const kit = isStill ? NO_KIT : kitOf(enterAgeMs, settings, 'drop')
+  const moving = creep && st !== 'done' ?{ start: clamp(fin(creep.start), 0, 1), target: clamp(fin(creep.target), 0, 1), delayMs: fin(creep.delayMs) } : null
   const look = trackLook(flow, st, agentsRunning, moving ? Math.max(moving.start, moving.target) : undefined)
   const percent = moving ? pct(moving.start * 100) : look.percent
   const n = Math.max(0, Math.round(fin(crew)))
@@ -1718,7 +1808,7 @@ export function progressDrawing(
     runningRatio: look.runningRatio,
     total: flow.total,
     color: look.color,
-    twinkle: look.twinkle,
+    twinkle: look.twinkle && !isStill,
     finished: look.finished,
     idKey: 'flow',
     grow: kit.grow,
@@ -1736,7 +1826,15 @@ ${track.body}
 </g>
 ${text(pctEnd, H / 2 + 4.5, percent, { cls: 'm', size: 12.5, num: true, anchor: 'end' })}
 ${mascot(theme, 'main', progressPose(theme, st), mascotX, (H - SPRITE_H * HEAD_SCALE) / 2, HEAD_SCALE)}${count ? text(countX, H / 2 + 4.5, count, { cls: 'm', size: 12, num: true }) : ''}`
-  return doc(W, H, body, `${flow.title || 'Flow'}: ${look.label}, ${percent}${n ? `, ${n} agent${n === 1 ? '' : 's'} running` : ''}`, { theme, rules, kit, clock: st === 'running' ? clock : undefined })
+  return doc(W, H, body, `${flow.title || 'Flow'}: ${look.label}, ${percent}${n ? `, ${n} agent${n === 1 ? '' : 's'} running` : ''}`, {
+    theme,
+    role: 'main',
+    pose: progressPose(theme, st),
+    still: isStill,
+    rules,
+    kit,
+    clock: st === 'running' ? clock : undefined,
+  })
 }
 
 // The collapsed row's word for the plan: `No task yet`, `Tasks 1/3` (the flow's label),
@@ -1784,7 +1882,7 @@ export function collapsedDrawing(o: {
   const x = HEAD_W + 8
   // The head sits in the row; the clip keeps hats and marks from spilling over its edges.
   const body = `<defs><clipPath id="hd"><rect width="${r(HEAD_W)}" height="${H}"/></clipPath></defs><g clip-path="url(#hd)">${mascot(theme, 'main', pose, 0, -2.5, HEAD_SCALE)}</g>${text(x, 14, fit(line, 12, W - x), { cls: 's', size: 12, num: true })}`
-  return doc(W, H, body, `Claude ${status ?? 'resting'}${parts.length ? ': ' + parts.join(', ') : ''}`, { theme, kit })
+  return doc(W, H, body, `Claude ${status ?? 'resting'}${parts.length ? ': ' + parts.join(', ') : ''}`, { theme, role: 'main', pose, kit })
 }
 
 // ---------------------------------------------------------------------------
@@ -1893,7 +1991,7 @@ export function tipLines(target: TipTarget, data: TipData): { title: string; lin
     case 'clock': {
       const start = usage?.sessionStartedAt
       return tipOut('Session time', [
-        Number.isFinite(start as number) ? `${fmtTime(now - (start as number))} since it started at ${fmtClock(start as number, tz).slice(0, 5)}` : 'Session start not known',
+        Number.isFinite(start as number) ? `${fmtStep(now - (start as number))} since it started at ${fmtClock(start as number, tz).slice(0, 5)}` : 'Session start not known',
       ])
     }
     default:
@@ -1974,7 +2072,7 @@ export function pillText(item: PillItem, data: PillData): PillText | null {
     }
     case 'time': {
       const start = usage?.sessionStartedAt
-      return pillOut('', fmtTime(Number.isFinite(start as number) ? now - (start as number) : 0), '', 'calm')
+      return pillOut('', fmtStep(Number.isFinite(start as number) ? now - (start as number) : 0), '', 'calm')
     }
     default:
       return null

@@ -30,7 +30,7 @@ import type {
   UiPressArgument,
 } from 'claude-code'
 
-import type { AgentRun, BarItem, Flow, Frame, FrameSnap, Limit, LogEntry, LogKind, LogOutcome, MainRun, Rates, Retired, Run, Settings, Sizes, Usage, View } from '../types'
+import type { AgentRun, BarItem, Flow, Frame, FrameSnap, Hold, Limit, Look, LogEntry, LogKind, LogOutcome, MainRun, Rates, Retired, Run, Settings, Sizes, Usage, View } from '../types'
 import {
   BAR_ITEMS,
   CURRENCIES,
@@ -48,6 +48,7 @@ import {
   appPlan,
   addUse,
   agentColor,
+  agentKind,
   agentLabel,
   anchoredPage,
   barLimitGauges,
@@ -76,6 +77,7 @@ import {
   flowSettled,
   fmtClock,
   fmtSpan,
+  fmtStep,
   fmtTime,
   fmtTokens,
   freshLimits,
@@ -115,6 +117,7 @@ import {
   sortAgents,
   stepSetting,
   taskColor,
+  taskKind,
   tallyMain,
   taskState,
   thoughtOf,
@@ -131,6 +134,8 @@ import {
 } from './model'
 import type { Gauge, Planned, ProgressInput, RowPages, TaskState } from './model'
 import {
+  CREEP_MS,
+  HAIRLINE,
   agentDrawing,
   backdropDrawing,
   cacheLine,
@@ -153,8 +158,9 @@ import {
   splitShares,
   tipLines,
   titleDrawing,
+  usageGauges,
 } from './draw'
-import type { Creep, Ctx, Drawing, IconName, PillIcon } from './draw'
+import type { Creep, Ctx, Drawing, IconName, PillIcon, Row } from './draw'
 
 // ---------------------------------------------------------------------------
 // Constants.
@@ -216,6 +222,9 @@ const MAX_OPEN_LOGS = 50
 // of drawing, finished or not: 16 finished agents (about 290,000 in all) were dropped while
 // the small guide pane drew. Rows past this many characters go to their section's `+N more`.
 const PANE_BUDGET = 120_000
+// An icon control's drawing at most (the largest, `copy` lit, is under 1,050 characters): the
+// pane counts every icon it shows against PANE_BUDGET at this size (B9).
+const ICON_COST = 1_100
 const PANE = 'crew-agents'
 const PANE_TITLE = 'Agents'
 const SETTINGS_PANE = 'crew-settings'
@@ -337,7 +346,8 @@ const ratesState = atom({ plugin: 'CPixelCrew', key: 'rates' } as const, { at: 0
 const nowState = atom({ plugin: 'CPixelCrew', key: 'now' } as const, 0)
 // What the pane and the bar draw from (2.5.0): composed from the values above, written at
 // most once a second and only when changed. The render hooks read these and `view` alone.
-const FRAME_SHAPE = 'frame-2.5a'
+// 2.5.0 slice B: a frame holds its mascots' looks and the progress row's hold.
+const FRAME_SHAPE = 'frame-2.5b'
 const paneFrameState = atom({ plugin: 'CPixelCrew', key: 'paneFrame' } as const, null, { shape: FRAME_SHAPE })
 const barFrameState = atom({ plugin: 'CPixelCrew', key: 'barFrame' } as const, null, { shape: FRAME_SHAPE })
 
@@ -404,7 +414,9 @@ type IconOpts = { active?: boolean; marginY?: Space; padX?: Space }
 // the run as a flow (`Agents d/n`), else none; `plan` is that plan while it applies, for
 // its planned rows. `running` is the real count of active agents (running or waiting) and
 // `state` the task rows' state, both reckoned once per drawing; nothing drawn reads
-// `flow.running`. `crew` is the bar's `×N`; `creep` its fill for this second, short of done.
+// `flow.running`. `crew` is the bar's `×N`; `creep` the glide of its fill as the progress row
+// was last rebuilt (B5, at most every CREEP_MS), short of done; `hold` that rebuild itself and
+// `looks` each mascot's `born` and stillness (B4, B10).
 // A frame's snap with the settings as they are now: what a drawing reads. `retired` is what
 // the rows no longer listed had spent, in the session's totals.
 type Snap = FrameSnap & { settings: Settings; creep: Creep | null; state: TaskState }
@@ -417,6 +429,7 @@ type Follow = { phase: string; phaseAt: number; thinking: string; tool: string; 
 
 const fin = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
+const isEntry = (v: unknown): v is LogEntry => isRecord(v)
 // The mod's own legacy rule: a subagent type that starts `pixel-crew:` (the 1.6 crew roles).
 const isLegacyCrewType = (type: string): boolean => /^pixel-crew:/i.test(type.trim())
 // Claude Code's own subagent types, which never report steps.
@@ -699,7 +712,10 @@ async function updateRun($: EngineInterface, agentId: string, change: (a: AgentR
 // them itself, so a busy second costs no timer.
 
 const FRAME_MS = 1_000
-const frames = {
+// B10: a finished or resting picture holds still this long after it finished or came to
+// rest; B4: a working or waiting mascot is born again once its stamp is this old.
+const STILL_MS = 60_000
+const freshFrames = () => ({
   /** Out of date since they were last composed. */
   isStale: false,
   /** A composition is asked for, by a `clock.after`. */
@@ -708,11 +724,33 @@ const frames = {
   heldUntil: -Infinity,
   /** Compositions run one after the other, so an older one never lands last. */
   chain: Promise.resolve(false) as Promise<boolean>,
-  /** What this load last wrote of each (`snap` and `clock`, as JSON), and the bar's clock. */
+  /** What this load last wrote of each (what its site shows, as JSON), and the bar's clock. */
   pane: '',
   bar: '',
   barClock: -1,
-}
+  /** When the frames were last composed: a draw asks for a fresh composition at most once per FRAME_MS (CA-5). */
+  composedAt: -Infinity,
+  /** The whole minute (of the clock) the frames were last composed in: the idle pane counts on once a minute (B11). */
+  minute: -1,
+  /** The first time a finished or resting mascot of the pane is due to hold still (B10): the idle tick composes then, for a drawn pane. */
+  dueAt: Infinity,
+  /** The first time the bar's finished progress row is due to hold still (B10): the idle tick composes then. */
+  barDueAt: Infinity,
+  /** A pane has been drawn since it was last opened, and not closed since (B11): only then does the idle pane get frames. */
+  isPaneDrawn: false,
+  /** The pane was closed (its panel button or a close): a draw of the closing pane does not count as drawn. */
+  isPaneClosed: false,
+  /** A pane frame was due but not written (no pane drawn, idle): the pane's next draw composes its own. */
+  isPaneBehind: false,
+  /** The bar has been drawn since the load: until then, an idle composition writes no bar frame (its first draw asks for one). */
+  isBarDrawn: false,
+  /** A bar frame was due but not written (the bar not drawn yet): its first draw composes its own. */
+  isBarBehind: false,
+  /** The pane's mascots and the bar's progress row as last composed (B4, B5, B10). */
+  looks: {} as Record<string, Look>,
+  hold: null as Hold | null,
+})
+const frames = freshFrames()
 
 // The frames out of date: composed at once, or as the hold ends.
 function framesStale($: EngineInterface): void {
@@ -749,45 +787,196 @@ async function framesNow($: EngineInterface): Promise<void> {
   await writeFrames($)
 }
 
-// Composes both frames from one read and writes each that differs from the last; true when
-// either was written, which holds them for FRAME_MS. `madeAt`, when it was composed, is left
-// out of the comparison.
+// Composes both frames from one read and writes each whose site would show something else;
+// true when either was written, which holds them for FRAME_MS. A composition or a write that
+// fails leaves them out of date, tried again a second on (CA-4).
 function writeFrames($: EngineInterface): Promise<boolean> {
   const run = async (): Promise<boolean> => {
     frames.isStale = false
-    const c = await composeSnap($)
-    const pane = paneFrameOf(c.snap, c.clock)
-    const bar = barFrameOf(c.snap, c.clock, c.isBusy)
-    const paneJson = JSON.stringify([pane.snap, pane.clock])
-    const barJson = JSON.stringify([bar.snap, bar.clock])
-    let isWritten = false
-    if (paneJson !== frames.pane) {
-      await $.state.set({ plugin: 'CPixelCrew', key: 'paneFrame' }, { shape: FRAME_SHAPE, value: pane })
-      frames.pane = paneJson
-      isWritten = true
+    let at = NaN
+    try {
+      at = await $.clock.now()
+      const c = await composeSnap($)
+      const clock = c.clock
+      frames.composedAt = clock
+      frames.minute = Math.floor(clock / 60_000)
+      const hold = nextHold(frames.hold, c.snap.hold ?? null, c.snap.state, clock)
+      const looks = nextLooks(frames.looks, c.snap, settingsNow(), clock)
+      const snap: FrameSnap = { ...c.snap, hold, creep: hold?.creep ?? null, looks }
+      frames.dueAt = dueOf(snap, clock)
+      frames.barDueAt = holdDueOf(snap.hold ?? null, clock)
+      // While nothing works the pane's times step together, once a minute (B11).
+      const paneAt = c.isBusy ? clock : frames.minute * 60_000
+      const pane = paneFrameOf(snap, paneAt, clock)
+      const bar = barFrameOf(snap, clock, c.isBusy)
+      const paneJson = paneShown(pane.snap)
+      const barJson = barShown(bar)
+      let isWritten = false
+      // Idle, a pane not drawn (never, or closed since) gets no frame: its next draw composes one (B11).
+      const isPaneDue = paneJson !== frames.pane
+      frames.isPaneBehind = isPaneDue && !c.isBusy && !frames.isPaneDrawn
+      if (isPaneDue && !frames.isPaneBehind) {
+        await $.state.set({ plugin: 'CPixelCrew', key: 'paneFrame' }, { shape: FRAME_SHAPE, value: pane })
+        frames.pane = paneJson
+        isWritten = true
+      }
+      // Idle, a bar not drawn since the load gets no frame: the first draw composes one (A-d2).
+      const isBarDue = barJson !== frames.bar
+      frames.isBarBehind = isBarDue && !c.isBusy && !frames.isBarDrawn
+      if (isBarDue && !frames.isBarBehind) {        await $.state.set({ plugin: 'CPixelCrew', key: 'barFrame' }, { shape: FRAME_SHAPE, value: bar })
+        frames.bar = barJson
+        frames.barClock = bar.clock
+        isWritten = true
+      }
+      // Kept once written or unchanged: a failed write composes them again next time.
+      frames.hold = hold
+      frames.looks = looks
+      if (isWritten) frames.heldUntil = clock + FRAME_MS
+      return isWritten
+    } catch {
+      if (Number.isFinite(at)) {
+        frames.isStale = true
+        frames.heldUntil = Math.max(frames.heldUntil, at + FRAME_MS)
+      }
+      return false
     }
-    if (barJson !== frames.bar) {
-      await $.state.set({ plugin: 'CPixelCrew', key: 'barFrame' }, { shape: FRAME_SHAPE, value: bar })
-      frames.bar = barJson
-      frames.barClock = bar.clock
-      isWritten = true
-    }
-    if (isWritten) frames.heldUntil = c.clock + FRAME_MS
-    return isWritten
   }
   const out = frames.chain.then(run, run).catch(() => false)
   frames.chain = out
   return out
 }
 
-// The pane's frame: the rows with only their open logs, the main agent's log only when open.
-// Its clock is the bookkeeping's (`at`): a render times its entrances on the clock as it draws.
-function paneFrameOf(s: FrameSnap, clock: number): Frame {
+// B5: the progress row is rebuilt when what it shows changes and, while it runs, once each ten
+// seconds of the clock, its fill gliding to where it will be then; a finished row keeps its
+// stamp and holds still a minute after its plan or run finished (B10).
+function nextHold(prev: Hold | null, fresh: Hold | null, state: TaskState, clock: number): Hold | null {
+  if (!fresh) return null
+  const same = !!prev && prev.key === fresh.key
+  if (state === 'done') {
+    const doneAt = fresh.doneAt ?? (same ? prev.doneAt : null) ?? clock
+    const still = clock >= doneAt + STILL_MS
+    if (same && prev.still === still && prev.doneAt === doneAt && prev.creep === null) return prev
+    return { key: fresh.key, creep: null, stamp: same ? prev.stamp : clock, still, doneAt }
+  }
+  if (state === 'running') {
+    const isDue = !same || Math.floor(clock / CREEP_MS) > Math.floor(prev.stamp / CREEP_MS)
+    return isDue ? { ...fresh, stamp: clock, still: false, doneAt: null } : prev
+  }
+  // Paused: rebuilt only when what it shows moves.
+  if (same && JSON.stringify(prev.creep) === JSON.stringify(fresh.creep)) return prev
+  return { ...fresh, stamp: clock, still: false, doneAt: null }
+}
+
+// B4 and B10: each mascot of the pane keeps its `born` while its looks hold; a working or
+// waiting one is born again on the first whole minute of the clock at least 30 seconds after
+// (so its stamp is never two minutes old, and the mascots that work together are renewed
+// together); a finished or resting one never is, and holds still a minute after it finished or
+// came to rest.
+function nextLooks(prev: Record<string, Look>, s: FrameSnap, settings: Settings, clock: number): Record<string, Look> {
+  const base = [settings.theme, settings.iconSize, settings.heroCard === true, s.view.isCompact]
+  const out: Record<string, Look> = {}
+  const add = (id: string, looks: unknown[], pose: string, isMoving: boolean, endAt: number | null): void => {
+    const key = JSON.stringify([...base, ...looks, pose])
+    const p = Object.hasOwn(prev, id) ? prev[id] : undefined
+    const kept = !!p && p.key === key
+    let born = kept && p ? p.born : clock
+    if (kept && p && isMoving && clock - p.born >= STILL_MS / 2 && Math.floor(clock / 60_000) > Math.floor(p.born / 60_000)) born = clock
+    const still = !isMoving && endAt !== null && clock >= endAt + STILL_MS
+    out[id] = p && kept && p.born === born && p.still === still ? p : { key, born, still }
+  }
+  const m = s.main
+  const mainPose = m.status === 'working' ? 'work' : m.status === 'waiting' ? 'wait' : 'rest'
+  add('main', ['main'], mainPose, mainPose !== 'rest', mainPose === 'rest' ? (m.turns > 0 ? (fin(m.doingSince) ?? 0) : 0) : null)
+  for (const a of s.list) {
+    const isMoving = isActive(a)
+    const pose = a.status === 'running' ? 'work' : a.status === 'waiting' ? 'wait' : 'done'
+    add(a.id, [KINDS[agentKind(a)]?.sprite ?? '', agentColor(a)], pose, isMoving, isMoving ? null : (fin(a.endedAt) ?? 0))
+  }
+  for (const p of plannedOf(s.plan, s.list)) add(`plan-${p.n}`, [KINDS[taskKind(p)]?.sprite ?? '', taskColor(p)], 'planned', false, null)
+  return out
+}
+
+// The first time the bar's finished progress row is due to hold still, or Infinity.
+function holdDueOf(h: Hold | null, clock: number): number {
+  if (!h || h.still || h.doneAt === null) return Infinity
+  const end = h.doneAt + STILL_MS
+  return end > clock ? end : Infinity
+}
+
+// The first time a mascot of the pane is due to hold still, or Infinity.
+function dueOf(s: FrameSnap, clock: number): number {
+  let due = Infinity
+  const at = (end: number): void => {
+    if (end > clock && end < due) due = end
+  }
+  const rows = new Map(s.list.map(a => [a.id, a]))
+  for (const [id, look] of Object.entries(s.looks ?? {})) {
+    if (look.still) continue
+    if (id === 'main' && s.main.status === 'resting') at((s.main.turns > 0 ? (fin(s.main.doingSince) ?? 0) : 0) + STILL_MS)
+    const a = rows.get(id)
+    if (a && !isActive(a)) at((fin(a.endedAt) ?? 0) + STILL_MS)
+  }
+  return due
+}
+
+// The pane's frame: the rows with only their open logs, the main agent's log only when open,
+// read at `at` (the clock while anything works, the whole minute while nothing does).
+function paneFrameOf(s: FrameSnap, at: number, clock: number): Frame {
   const open = new Set(s.view.openLogs)
   const list = s.list.map(a => (open.has(a.id) || !a.log.length ? a : { ...a, log: [] }))
   const main = open.has('main') || !s.main.log.length ? s.main : { ...s.main, log: [] }
-  return { snap: { ...s, list, main }, clock: s.at, madeAt: clock }
+  return { snap: { ...s, list, main, at }, clock: at, madeAt: clock }
 }
+
+// What the pane shows, as one string: its frame without the time it was read at, and every
+// time it shows as its text (B1), so a frame whose texts did not step is not written again.
+function paneShown(s: FrameSnap): string {
+  const { at, ...rest } = s
+  const times = s.list.map(a => (isActive(a) ? fmtStep(elapsed(a, at)) : ''))
+  times.push(fmtStep(mainWorkedMs(s.main, at)))
+  if (s.main.status === 'resting') times.push(String(Math.floor(Math.max(0, at - (fin(s.main.doingSince) ?? at)) / 60_000)))
+  times.push(fmtStep(totals(s.main, s.list, s.usage, at, s.retired).timeMs))
+  times.push(JSON.stringify(usageGauges(s.usage, minuteOf(at))))
+  return JSON.stringify([rest, times])
+}
+
+// What the bar shows, as one string: its frame without the time it was read at or its clock,
+// and every text that tells a time as the bar draws it (the pills, wide and narrow, their hover
+// cards and the limits' meters), so a frame whose texts did not step is not written again (B8).
+function barShown(f: Frame): string {
+  const { at: _at, ...rest } = f.snap
+  return JSON.stringify([rest, barTimes(f)])
+}
+
+function barTimes(f: Frame): unknown[] {
+  try {
+    const s: Snap = { ...f.snap, settings: settingsNow() }
+    const at = Math.max(fin(s.at) ?? 0, fin(f.clock) ?? 0)
+    const isWorking = s.main.status === 'working' || s.running > 0
+    const countAt = countAtOf(at, isWorking)
+    const out: unknown[] = limitGauges(s.usage, countAt).map(g => [g.kind, g.used, g.left, g.tone, g.isResetting === true])
+    for (const isNarrow of [false, true]) {
+      const p: PillCtx = { s, at, countAt, isNarrow, isWorking, scale: 1, tzOffsetMin: tzOf(at) }
+      for (const x of pillItems(p)) {
+        const tip = tipOf(p, x.tip, x.gauge, x.isUsageLeft === true)
+        let lines: unknown = null
+        try {
+          // While anything works the cache pill reads `…` (the cache is being written again), so
+          // its card's countdown alone writes no frame: it is shown as of the last one.
+          if (!(isWorking && x.kind === 'cache')) lines = tipLines(tip.target, tip.data)
+        } catch {
+          // A card that cannot be told shows nothing.
+        }
+        out.push([x.key, x.words, lines])
+      }
+    }
+    return out
+  } catch {
+    return [f.clock]
+  }
+}
+
+const minuteOf = (at: number): number => Math.floor(at / 60_000) * 60_000
 
 // While nothing works, the bar's time steps once a minute; in the cache's last five minutes,
 // and once it has expired, once a second (A7).
@@ -795,14 +984,20 @@ const CACHE_SECONDS_MS = 300_000
 function barClockOf(clock: number, cacheExpiresAt: number | null): number {
   const second = Math.floor(clock / 1000) * 1000
   if (typeof cacheExpiresAt === 'number' && cacheExpiresAt - second <= CACHE_SECONDS_MS) return second
-  return Math.floor(clock / 60_000) * 60_000
+  return minuteOf(clock)
 }
 
-// The bar's frame: no rows, no logs, no plan rows; its time exact while anything works.
+// The bar's frame: no rows, no logs, no plan rows, no mascots of the pane; its time exact while
+// anything works. While nothing does, its time moves only for the cache's countdown (A7); with
+// none on show it stands, so a composition for the pane writes no bar frame.
 function barFrameOf(s: FrameSnap, clock: number, isBusy: boolean): Frame {
+  const expires = s.usage.cacheExpiresAt
+  const isCounting = settingsNow().barItems.includes('cache') && typeof expires === 'number' && frames.barClock < expires
+  const idle = isCounting || frames.barClock < 0 ? barClockOf(clock, expires) : frames.barClock
+  const { looks: _looks, ...rest } = s
   return {
-    snap: { ...s, list: [], plan: null, retired: blankRetired(), main: s.main.log.length ? { ...s.main, log: [] } : s.main },
-    clock: isBusy ? clock : barClockOf(clock, s.usage.cacheExpiresAt),
+    snap: { ...rest, list: [], plan: null, retired: blankRetired(), main: s.main.log.length ? { ...s.main, log: [] } : s.main },
+    clock: isBusy ? clock : idle,
     madeAt: clock,
   }
 }
@@ -1402,6 +1597,7 @@ async function openClear($: EngineInterface, pane: { id: string; title: string }
 // remembered for this session (PANE_OPEN_KEY).
 async function openPane($: EngineInterface, isKept = false): Promise<void> {
   const at = await stamp($)
+  frames.isPaneClosed = false
   if (!(await isOpenPane($, PANE))) await put($, viewState, v => ({ ...normalizeView(v), paneOpenedAt: at }))
   if (await openClear($, { id: PANE, title: PANE_TITLE }, isKept)) await rememberPaneOpen($)
   $.ui.invalidate('ui.render')
@@ -1428,7 +1624,8 @@ async function togglePane($: EngineInterface): Promise<boolean> {
   }
   await $.ui.close({ id: PANE })
   // Forgotten here as well as in the ui.close hook: a close made from a press may not reach
-  // the mod's own hooks.
+  // the mod's own hooks. A closed pane gets no idle frame (B11).
+  paneClosed()
   await forgetPaneOpen($)
   $.ui.invalidate('ui.render')
   return false
@@ -1534,8 +1731,9 @@ async function refreshRates($: EngineInterface): Promise<void> {
   }
 }
 
-// Once a second: the clocks of whatever is running, and now and then the agent
-// list, in case an end never reached a hook.
+// Once a second: while anything runs, the fill and the stream, and the frames composed again
+// (written only when what they show changed); while nothing does, a composition only when one
+// is due; and now and then the agent list, in case an end never reached a hook.
 async function tick($: EngineInterface): Promise<void> {
   kickAfterLoad($)
   try {
@@ -1548,19 +1746,25 @@ async function tick($: EngineInterface): Promise<void> {
     const list = cleanRows(await read($, agentsState))
     const isBusy = (isRecord(m) && typeof m.turnStartedAt === 'number') || list.some(isActive)
     if (isBusy) {
-      // The clocks of whatever runs: the frames are composed again, with this second's time.
+      // The clocks of whatever runs: the frames are composed again with this second's time,
+      // and written only when a time they show steps (B1), a mascot is due (B4, B10) or the
+      // progress row is (B5).
       await holdFill($, at, list)
       await streamDue($, at).catch(() => undefined)
       frames.isStale = true
       await flushFrames($, at)
     } else {
-      // Idle (A7): the tick writes nothing and invalidates nothing. Only the bar's cache
-      // countdown moves: its frame is composed again when the bar's time steps, once a
-      // minute, once a second in the last five; the pane's frame stands.
+      // Idle (A7): the tick writes no value and invalidates nothing. The frames are composed
+      // again when the bar's cache countdown steps (once a minute, once a second in the last
+      // five, then once to show it expired, and no more: CA-1), when the pane's minute turns
+      // (B11) and when a finished or resting picture is due to hold still (B10).
       const u = await read($, usageState)
       const s = settingsNow()
       const expires = isRecord(u) && typeof u.cacheExpiresAt === 'number' ? u.cacheExpiresAt : null
-      if (s.barItems.includes('cache') && expires !== null && at < expires + TICK_MS && barClockOf(at, expires) !== frames.barClock) framesStale($)
+      const isCacheDue = s.barItems.includes('cache') && expires !== null && frames.barClock < expires && barClockOf(at, expires) !== frames.barClock
+      // The pane only while one is open and has been drawn (B11): a closed pane counts nothing.
+      const isPaneDue = frames.isPaneDrawn && (Math.floor(at / 60_000) !== frames.minute || at >= frames.dueAt)
+      if (isCacheDue || isPaneDue || at >= frames.barDueAt) framesStale($)
     }
     if (list.some(isActive) && live.ticks % SYNC_EVERY === 0) await syncAgents($)
   } catch {
@@ -1722,8 +1926,15 @@ async function forgetPaneOpen($: EngineInterface): Promise<void> {
 // module reloading) leaves it, so the pane comes back with the session.
 async function onPaneClose($: EngineInterface, e: In<'ui.close'>, next: NextOf<'ui.close'>) {
   const closed = await next(e)
+  paneClosed()
   if (closeForgetsPane(e.origin)) await forgetPaneOpen($)
   return closed
+}
+
+// The pane closed: until it is opened or drawn again, the idle tick composes nothing for it (B11).
+function paneClosed(): void {
+  frames.isPaneDrawn = false
+  frames.isPaneClosed = true
 }
 
 // A resumed session whose agents pane was open when its process went (the app restarts it
@@ -2378,9 +2589,12 @@ async function onMeasure($: EngineInterface, e: In<'session.measure'>, next: Nex
 type Raw = { flow?: unknown; run?: unknown; agents?: unknown; retired?: unknown; main?: unknown; usage?: unknown; view?: unknown; rates?: unknown; now?: unknown }
 
 // Reads the bookkeeping values and composes the snap both frames are cut from, at the clock now.
-// `isBusy`: the main loop works or an agent is active, so the bar's time runs to the ms.
-// What composing read of each value, by the count of this load's writes to it when read: a
-// frame composed while nothing was written reads no value again (`put` counts the writes).
+// `isBusy`: the main loop works or an agent is active: the bar's time runs to the ms and the
+// pane's times are read at the clock, not at its whole minute.
+// The read cache: what composing last read of each value, with the count of this load's own
+// writes to it through `put` at that read. A value is read again only after `put` wrote it;
+// a change made any other way is not seen until then. `register` empties both maps, so
+// a new load reads every value afresh (CA-3).
 const readCache = new Map<string, { gen: number; value: unknown }>()
 const writeGens = new Map<string, number>()
 
@@ -2415,7 +2629,8 @@ async function composeSnap($: EngineInterface): Promise<{ snap: FrameSnap; clock
   ])
   const snap = snapOf({ flow, run, agents, retired, main, usage, view, rates, now }, typeof model === 'string' ? model : '', clock)
   const isBusy = snap.main.turnStartedAt !== null || snap.running > 0
-  // While anything works the tick writes no `now`: the frame's own time stands in for it.
+  // While anything works the tick writes no `now`: the clock stands in for it. While nothing
+  // does, `writeFrames` reads the pane at the whole minute (B11).
   return { snap: isBusy && clock > snap.at ? { ...snap, at: clock } : snap, clock, isBusy }
 }
 
@@ -2425,32 +2640,60 @@ async function composeSnap($: EngineInterface): Promise<{ snap: FrameSnap; clock
 function snapOf(raw: Raw, model: string, clock: number): FrameSnap {
   // A hot reload hands this code what v1 wrote: runs and the main agent may lack a log.
   // Runs and planned tasks 1.6 wrote (a role, no kind) read as 2.0 keeps them.
-  const list = cleanRows(raw.agents).map(normalizeAgent)
+  // Nested junk too (CA-6): a log entry that is not a record is dropped, limits that are not a
+  // list read as none, a run's ids that are not a list as none.
+  const list = cleanRows(raw.agents)
+    .map(normalizeAgent)
+    .map(a => (logOf(a).every(isRecord) ? a : { ...a, log: logOf(a).filter(isEntry) }))
   const rawFlow = isRecord(raw.flow) ? (raw.flow as Flow) : null
   const flow = rawFlow ? { ...rawFlow, tasks: normalizeTasks(rawFlow.tasks) } : null
-  const run = isRecord(raw.run) ? (raw.run as Run) : null
+  const rawRun = isRecord(raw.run) ? (raw.run as Run) : null
+  const run = rawRun && !Array.isArray(rawRun.ids) ? { ...rawRun, ids: [] } : rawRun
   const rawMain = isRecord(raw.main) ? (raw.main as Partial<MainRun>) : {}
-  const logged: MainRun = { ...blankMain(0), ...rawMain, log: logOf(rawMain) }
+  const logged: MainRun = { ...blankMain(0), ...rawMain, log: logOf(rawMain).filter(isEntry) }
   if (typeof logged.turnStartedAt !== 'number') logged.turnStartedAt = null
   const main = model ? { ...logged, model } : logged
-  const usage: Usage = isRecord(raw.usage) ? { ...blankUsage(0), ...(raw.usage as Partial<Usage>) } : blankUsage(0)
+  const rawUsage: Usage = isRecord(raw.usage) ? { ...blankUsage(0), ...(raw.usage as Partial<Usage>) } : blankUsage(0)
+  // `at` is when the usage was last measured, which no site shows: a refresh that changed
+  // nothing shown writes no frame (CA-2).
+  const usage: Usage = { ...rawUsage, at: 0, limits: Array.isArray(rawUsage.limits) ? rawUsage.limits.filter((l): l is Limit => isRecord(l)) : [] }
   const now = fin(raw.now) ?? 0
   const at = list.reduce((x, a) => Math.max(x, fin(a.startedAt) ?? 0), Math.max(now, main.turnStartedAt ?? 0, 0))
   // A session whose start was missed counts from now rather than from 1970.
   const u = usage.sessionStartedAt > 0 ? usage : { ...usage, sessionStartedAt: at }
   // Active means running or waiting: an agent waiting for approval is still at work.
   const running = list.filter(isActive).length
-  const shown = barView(flow, run, list, Math.max(clock, at))
+  const shown = barView(flow, run, list, Math.max(clock, at), main.turnStartedAt ?? null)
   const state = taskState(shown.flow, main.status === 'working', running)
-  // The fill moves from what the last tick (`at`) showed, never under the high-water mark,
-  // to where it will be at the next, as far into that second as the clock is.
+  // The fill glides from where it is now, never under the high-water mark, to where it will be
+  // CREEP_MS on (B5): the progress row built from it stands for those ten seconds.
   let creep: Creep | null = null
+  const from = Math.max(clock, at)
   if (shown.flow && state !== 'done' && state !== 'none') {
     // An agent counted stuck at the last mark that works again was counted over: the mark is void.
     const quiet = run && !shown.isPlan && Array.isArray(run.quiet) ? run.quiet : []
     const isRevived = !!run && quiet.length > 0 && runQuiet(run, list, at).live.some(id => quiet.includes(id))
     const high = run && run.highKey === shown.key && !isRevived ? run.high : 0
-    creep = creepSpan(high, viewFill(shown, run, list, at), viewFill(shown, run, list, at + TICK_MS), Math.max(clock, at) - at)
+    // A rebuild starts its glide afresh: no delay into it (the frame's type keeps the field).
+    creep = { ...creepSpan(high, viewFill(shown, run, list, from), viewFill(shown, run, list, from + CREEP_MS)), delayMs: 0 }
+  }
+  // The progress row as it would be rebuilt now: what it shows apart from its fill, and, done,
+  // when its plan was reported finished or its run's last agent ended (B10). `writeFrames`
+  // decides from the last one whether it is rebuilt.
+  let hold: Hold | null = null
+  if (shown.flow && state !== 'none') {
+    const f = shown.flow
+    const key = JSON.stringify([f.title, f.total, f.done, f.running, f.phase, f.isFinished, f.unit ?? '', state, shown.crew, running])
+    let doneAt: number | null = null
+    if (state === 'done') {
+      if (shown.isPlan) doneAt = fin(f.reportedAt) ?? null
+      else {
+        const ids = new Set(run && Array.isArray(run.ids) ? run.ids : [])
+        const ends = list.filter(a => ids.has(a.id)).map(a => fin(a.endedAt) ?? 0)
+        doneAt = ends.length ? Math.max(...ends) : null
+      }
+    }
+    hold = { key, creep: state === 'done' ? null : creep, stamp: from, still: false, doneAt }
   }
   return {
     flow: shown.flow,
@@ -2467,6 +2710,7 @@ function snapOf(raw: Raw, model: string, clock: number): FrameSnap {
     at,
     running,
     state,
+    hold,
   }
 }
 
@@ -2476,11 +2720,45 @@ function snapOf(raw: Raw, model: string, clock: number): FrameSnap {
 async function drawnSnap($: EngineInterface, site: 'pane' | 'bar'): Promise<{ s: Snap; frameClock: number }> {
   const frame = await (site === 'pane' ? read($, paneFrameState) : read($, barFrameState)).catch(() => null)
   const clock = await $.clock.now().catch(() => 0)
+  if (site === 'bar' && frames.isBarBehind) {
+    // The bar's frame was held back while it was not drawn (A-d2): this first draw reads the
+    // values as they are, and the frame it shows is written by a timer once the render is done.
+    try {
+      const c = await composeSnap($)
+      const hold = nextHold(frames.hold, c.snap.hold ?? null, c.snap.state, c.clock)
+      // Kept, so the frame written next carries the stamp this draw shows.
+      frames.hold = hold
+      const bar = barFrameOf({ ...c.snap, hold, creep: hold?.creep ?? null }, c.clock, c.isBusy)
+      framesStale($)
+      return { s: { ...bar.snap, settings: settingsNow() }, frameClock: bar.clock }
+    } catch {
+      // The stored frame below.
+    }
+  }
+  if (site === 'pane' && frames.isPaneBehind) {
+    // The pane's frame was held back while no pane was drawn (B11): this draw reads the values
+    // as they are, at the whole minute, and the frame it shows is written by a timer at once.
+    try {
+      const c = await composeSnap($)
+      const hold = nextHold(frames.hold, c.snap.hold ?? null, c.snap.state, c.clock)
+      frames.hold = hold
+      const looks = nextLooks(frames.looks, c.snap, settingsNow(), c.clock)
+      frames.looks = looks
+      const paneAt = c.isBusy ? c.clock : minuteOf(c.clock)
+      const pane = paneFrameOf({ ...c.snap, hold, creep: hold?.creep ?? null, looks }, paneAt, c.clock)
+      framesStale($)
+      return { s: { ...pane.snap, settings: settingsNow() }, frameClock: pane.clock }
+    } catch {
+      // The stored frame below.
+    }
+  }
   if (isRecord(frame) && isRecord(frame.snap)) {
     const f = frame as Frame
-    // A site drawn long after its frame was composed (a mount after an idle spell) asks for a
-    // fresh one; it is written only if it differs, so a redraw for a new frame asks for none.
-    if (!(clock - (fin(f.madeAt) ?? 0) < FRAME_MS)) framesStale($)
+    // A site drawn more than a second after the frames were last composed (a mount after an
+    // idle spell) asks for a fresh composition, written only if what it shows differs. The
+    // time is the last composition's, not the frame's: an unchanged frame is not written
+    // again, so draws cause at most one composition a second however many there are (CA-5).
+    if (!(clock - frames.composedAt < FRAME_MS)) framesStale($)
     return { s: { ...f.snap, settings: settingsNow() }, frameClock: fin(f.clock) ?? 0 }
   }
   const view = await read($, viewState).catch(() => null)
@@ -2488,7 +2766,8 @@ async function drawnSnap($: EngineInterface, site: 'pane' | 'bar'): Promise<{ s:
   return { s: { ...snapOf({ view }, '', clock), settings: settingsNow() }, frameClock: clock }
 }
 
-// The clock as a render runs: entrances are timed by it, since `now` stands still while nothing runs.
+// The clock as a render runs: only entrances are timed by it. Every time a site shows is its
+// frame's (`at`, the bar's `clock`), so a redraw of the same frame draws the same pictures.
 async function clockOf($: EngineInterface, s: Snap): Promise<number> {
   return $.clock.now().catch(() => s.at)
 }
@@ -2520,11 +2799,6 @@ function entranceAge(s: Settings, since: number, clock: number): number | undefi
   return s.animations && since > 0 && clock >= since ? clock - since : undefined
 }
 
-// The most recent of several entrances.
-function youngest(...ages: (number | undefined)[]): number | undefined {
-  const known = ages.filter((x): x is number => x !== undefined)
-  return known.length ? Math.min(...known) : undefined
-}
 
 function button(ui: Kit, key: string, label: string, onPress: Press, padX: Space = BTN_PAD_X, marginY: Space = BTN_MARGIN_Y): RenderElement {
   const { Box, Button } = ui
@@ -2680,7 +2954,12 @@ type TipTarget = Parameters<typeof tipLines>[0]
 type TipData = Parameters<typeof tipLines>[1]
 type PillTip = { target: TipTarget; data: TipData }
 type PillSpec = { key: string; kind: PillKind; tone: PillTone; parts: PillPart[]; tip: PillTip }
-type PillCtx = { s: Snap; at: number; isNarrow: boolean; isWorking: boolean; scale: number; tzOffsetMin: number }
+// `countAt`: the time the countdowns (a limit's reset, the cache's expiry) are read at; while
+// anything works, the whole minute, so they step together once a minute as the idle bar's do (B8).
+type PillCtx = { s: Snap; at: number; countAt: number; isNarrow: boolean; isWorking: boolean; scale: number; tzOffsetMin: number }
+
+const countAtOf = (at: number, isWorking: boolean): number => (isWorking ? minuteOf(at) : at)
+const isCountdown = (kind: string): boolean => kind === 'limit' || kind === 'cache'
 type TextSize = 'caption' | 'footnote' | 'body'
 
 // The grey of a muted pill's icon (a limit `resetting…`), the paused task row's grey.
@@ -2711,7 +2990,7 @@ type PillEntry = { key: string; kind: PillKind; words: PillWords; gauge?: Gauge;
 // `pillText`'s answer for one pill; null (no pill) when it has nothing to say or fails.
 function wordsOf(p: PillCtx, kind: PillKind, gauge?: Gauge): PillWords | null {
   try {
-    const data = { usage: p.s.usage, main: p.s.main, isWorking: p.isWorking, now: p.at, isNarrow: p.isNarrow }
+    const data = { usage: p.s.usage, main: p.s.main, isWorking: p.isWorking, now: isCountdown(kind) ? p.countAt : p.at, isNarrow: p.isNarrow }
     const w = pillText(kind, gauge ? { ...data, gauge } : data)
     if (!w || typeof w.value !== 'string') return null
     // The cache countdown in whole minutes until five are left, then `m:ss` (A7); the tone stays.
@@ -2729,7 +3008,7 @@ function wordsOf(p: PillCtx, kind: PillKind, gauge?: Gauge): PillWords | null {
 // whose reset just passed is among them, and `pillText` says `resetting…` or leaves it out.
 function pillItems(p: PillCtx): PillEntry[] {
   const items = p.s.settings.barItems
-  const limits = barLimitGauges(items, limitGauges(p.s.usage, p.at))
+  const limits = barLimitGauges(items, limitGauges(p.s.usage, p.countAt))
   const out: PillEntry[] = []
   const add = (key: string, kind: PillKind, tip: TipTarget, gauge?: Gauge, icon?: PillIcon, isUsageLeft = false): void => {
     const words = wordsOf(p, kind, gauge)
@@ -2764,7 +3043,7 @@ function pillItems(p: PillCtx): PillEntry[] {
 // A pill's hover card: `target` read against what the bar shows, and the pill's gauge.
 function tipOf(p: PillCtx, target: TipTarget, gauge?: Gauge, isUsageLeft = false): PillTip {
   const { s } = p
-  const data: TipData = { usage: s.usage, main: s.main, settings: s.settings, rates: s.rates, now: p.at, tzOffsetMin: p.tzOffsetMin, ...(isUsageLeft ? { isUsageLeft } : {}) }
+  const data: TipData = { usage: s.usage, main: s.main, settings: s.settings, rates: s.rates, now: isCountdown(target) ? p.countAt : p.at, tzOffsetMin: p.tzOffsetMin, ...(isUsageLeft ? { isUsageLeft } : {}) }
   return { target, data: gauge ? { ...data, gauge } : data }
 }
 
@@ -2868,7 +3147,9 @@ function barDesktop(ui: SvgKit, b: BarParts): RenderElement {
   }
   // The row tells the task's state (`No task yet`, running, paused, done); its faint
   // layer follows the real running agents, never `flow.running`.
-  const d = progressDrawing(f, leftW, s.settings, s.state, b.crew, b.running, enterAgeMs, s.creep ?? undefined, b.clock)
+  // As last rebuilt (B5): its glide, its stamp, and still a minute after it finished (B10).
+  const hold = s.hold ?? null
+  const d = progressDrawing(f, leftW, s.settings, s.state, b.crew, b.running, enterAgeMs, hold?.creep ?? undefined, hold?.stamp, hold?.still === true)
   const progress = sideRow(ui, 'bar-progress', picture('progress', d), barIcons(ui, b))
   const p = pillCtx(b, zb)
   const size = barTextSize(s.settings.barSize)
@@ -2907,7 +3188,7 @@ function surfacePanel(ui: Kit, key: string, content: RenderElement, padX: Space)
 
 // What the pills read: the bar's clock, its width and whether anything works.
 function pillCtx(b: BarParts, scale: number): PillCtx {
-  return { s: b.s, at: b.at, isNarrow: b.columns > 0 && b.columns < NARROW_COLUMNS, isWorking: b.isWorking, scale, tzOffsetMin: tzOf(b.clock) }
+  return { s: b.s, at: b.at, countAt: countAtOf(b.at, b.isWorking), isNarrow: b.columns > 0 && b.columns < NARROW_COLUMNS, isWorking: b.isWorking, scale, tzOffsetMin: tzOf(b.clock) }
 }
 
 // One pill as text: `5h 7% left`, `#3`.
@@ -2982,22 +3263,64 @@ function agentsDesktop($: EngineInterface, ui: SvgKit, s: Snap, columns: number,
   const cols = columns || 41
   // The drawings' room: the pane less a cell of slack and the scroll-bar gutter at its right.
   const px = Math.max(160, cols * CELL - CELL) - SCROLL_GUTTER
-  const at = Math.max(s.at, clock)
-  const tz = tzOf(clock)
+  // Every time the pane shows is its frame's (B1, B11): a redraw of the same frame draws the
+  // same pictures. Only entrances run on the clock as it draws.
+  const at = s.at
+  const tz = tzOf(at)
   const paneAge = entranceAge(s.settings, s.view.paneOpenedAt, clock)
-  // Its times run on the real clock while nothing works, when the stored one stands still.
   const ctx: Ctx = { W: Math.floor(px / z), now: at, settings: s.settings, rates: s.rates, tzOffsetMin: tz, enterAgeMs: paneAge }
   // Rows leave room at their right for the icon column; the title for its three icons.
   const rowCtx: Ctx = { ...ctx, W: Math.max(120, Math.floor((px - PANEL_COL * CELL) / z)) }
   const titleCtx: Ctx = { ...ctx, W: Math.max(80, Math.floor((px - TITLE_COL * CELL) / z)) }
-  // The card, Normal or compact, sits on the bar's panel across the pane, inside its border.
-  const cardCtx: Ctx = { ...ctx, W: Math.max(120, Math.floor((px - CARD_PANEL_X * CELL) / z)) }
+  // The card, Normal or compact, sits on the bar's panel across the pane, inside its border;
+  // its countdowns step on the whole minute (B-d1).
+  const cardCtx: Ctx = { ...ctx, now: Math.floor(at / 60_000) * 60_000, W: Math.max(120, Math.floor((px - CARD_PANEL_X * CELL) / z)) }
+  // A row's mascot: its `born` as its stamp, still once it holds still (B4, B10).
+  const looked = (id: string, c: Ctx): Ctx => {
+    const look = s.looks && Object.hasOwn(s.looks, id) ? s.looks[id] : undefined
+    return { ...c, enterAgeMs: undefined, ...(look ? { clock: look.born, still: look.still } : {}) }
+  }
   // What the pane's drawings come to so far, against PANE_BUDGET.
   let spent = 0
+  const svgOf = (key: string, d: Drawing, alt = printable(d.alt) || 'drawing'): RenderElement => (
+    <Svg key={key} source={d.source} alt={alt} width={Math.round(d.width * z)} height={Math.round(d.height * z)} />
+  )
   const picture = (key: string, d: Drawing): RenderElement => {
     spent += d.source.length
-    return <Svg key={key} source={d.source} alt={printable(d.alt) || 'drawing'} width={Math.round(d.width * z)} height={Math.round(d.height * z)} />
+    return svgOf(key, d)
   }
+  // A row's two pictures side by side (B2), and under an agent's or a planned row the hairline,
+  // one constant picture stretched to the row's width. PANE_BUDGET counts all of them (B9).
+  // The text picture's alt tells the row; the mascot beside it is decoration, with none.
+  const rowCost = (r: Row, isLined: boolean): number => r.mascot.source.length + r.text.source.length + (isLined ? HAIRLINE.source.length : 0)
+  const pair = (key: string, r: Row, isLined: boolean): RenderElement => {
+    spent += rowCost(r, isLined)
+    // A stacked row (`over`): the text picture is the whole row, and the mascot picture is laid
+    // over its empty top-left corner by an absolute Box at its parent's top-left (0, 0: exact).
+    const both = r.over ? (
+      <Box key={`${key}-pair`} position="relative" flexDirection="row" alignItems="flex-start" flexShrink={0}>
+        {svgOf(`${key}-text`, r.text)}
+        <Box key={`${key}-corner`} position="absolute" top={0} left={0}>
+          {svgOf(`${key}-mascot`, r.mascot, '')}
+        </Box>
+      </Box>
+    ) : (
+      // Side by side: the mascot picture is its own size; where 2.4.0 centred the mascot
+      // (`centred`), the two pictures are centred against each other (B4).
+      <Box key={`${key}-pair`} flexDirection="row" alignItems={r.centred ? 'center' : 'flex-start'} flexShrink={0}>
+        {svgOf(`${key}-mascot`, r.mascot, '')}
+        {svgOf(`${key}-text`, r.text)}
+      </Box>
+    )
+    if (!isLined) return both
+    return (
+      <Box key={key} flexDirection="column" flexShrink={0}>
+        {both}
+        <Svg key={`${key}-line`} source={HAIRLINE.source} alt="" width={Math.round((r.over ? r.text.width : r.mascot.width + r.text.width) * z)} height={Math.max(1, Math.round(z))} />
+      </Box>
+    )
+  }
+  const rowH = (r: Row): number => (r.over ? r.text.height : Math.max(r.mascot.height, r.text.height))
   const fits = (cost: number): boolean => spent + cost <= PANE_BUDGET
   // Tiles, meters and rows are plain drawings: no hover cards.
   const item = (key: string, d: Drawing): RenderElement => picture(key, d)
@@ -3007,11 +3330,10 @@ function agentsDesktop($: EngineInterface, ui: SvgKit, s: Snap, columns: number,
   const flowTitle = s.flow && !s.flow.isFinished ? s.flow.title : ''
   // With no plan on, the title drawing says `No task yet`, muted.
   const titleD = titleDrawing(titleCtx, flowTitle)
-  const icons = rightCol(ui, 'title-icons', TITLE_COL, titleControls($, ui, s, panes, PANEL_ICON), TITLE_ICON_GAP)
+  const controls = titleControls($, ui, s, panes, PANEL_ICON)
+  spent += ICON_COST * (Array.isArray(controls) ? controls.length : 1)
+  const icons = rightCol(ui, 'title-icons', TITLE_COL, controls, TITLE_ICON_GAP)
   const top = sideRow(ui, 'title-row', picture('title', titleD), icons)
-
-  // An agent's entrance: the pane's, or its own start when that is later.
-  const enterOf = (a: AgentRun): number | undefined => youngest(paneAge, entranceAge(s.settings, a.startedAt, clock))
 
   // The backdrop, drawn under everything when it is not plain: its tiles count against the
   // budget too, one per 4096 px of height, so each row is costed with its share of them.
@@ -3078,20 +3400,20 @@ function agentsDesktop($: EngineInterface, ui: SvgKit, s: Snap, columns: number,
     const head = [
       top,
       surfacePanel(ui, 'compact-card-back', picture('compact-card', compactCardDrawing(cardCtx, t, s.usage)), 0),
-      picture('compact-main', compactMainDrawing({ ...ctx, clock }, s.main, s.flow, s.running)),
+      pair('compact-main', compactMainDrawing(looked('main', ctx), s.main, s.flow, s.running), false),
     ]
     const foot = planned.length || sorted.finished.length ? [picture('compact-foot', compactFootDrawing(ctx, planned.length, sorted.finished.length, failed))] : []
     const lines: RenderElement[] = []
     const units: Unit[] = [...sorted.working, ...sorted.waiting].map(a => {
-      let d: Drawing | null = null
-      const make = (): Drawing => (d ??= compactAgentDrawing({ ...ctx, enterAgeMs: enterOf(a), clock }, a))
+      let d: Row | null = null
+      const make = (): Row => (d ??= compactAgentDrawing(looked(a.id, ctx), a))
       return {
         id: a.id,
         section: 'work',
-        cost: () => make().source.length,
+        cost: () => rowCost(make(), false),
         put: () => {
           const m = make()
-          lines.push(fits(m.source.length) ? picture(`compact-${a.id}`, m) : tooLarge(a.id))
+          lines.push(fits(rowCost(m, false)) ? pair(`compact-${a.id}`, m, false) : tooLarge(a.id))
         },
       }
     })
@@ -3108,29 +3430,32 @@ function agentsDesktop($: EngineInterface, ui: SvgKit, s: Snap, columns: number,
     height += d.height
     parts.push(picture(`h-${key}`, d))
   }
-  // A row: its drawing and its log icon; with the log open, the log under it and a copy
+  // A row: its two pictures and its log icon; with the log open, the log under it and a copy
   // icon. Its drawings are made once, for its cost and for its place on the page.
-  const rowUnit = (id: string, section: string, draw: () => Drawing, rowLog: RowLog): Unit => {
+  const rowUnit = (id: string, section: string, draw: () => Row, rowLog: RowLog, isLined = true): Unit => {
     const isOpen = s.view.openLogs.includes(id)
     const entries = rowLog.log ?? []
     const hasLog = isOpen && (entries.length > 0 || !!rowLog.head)
-    let made: { d: Drawing; ld: Drawing | null } | null = null
-    const make = (): { d: Drawing; ld: Drawing | null } => (made ??= { d: draw(), ld: hasLog ? logDrawing(rowCtx, entries, rowLog.color, rowLog.head) : null })
+    let made: { d: Row; ld: Drawing | null } | null = null
+    const make = (): { d: Row; ld: Drawing | null } => (made ??= { d: draw(), ld: hasLog ? logDrawing(rowCtx, entries, rowLog.color, rowLog.head) : null })
+    // Its icons: the log's, and the copy icon beside an open log with entries.
+    const icons = ICON_COST * (1 + (hasLog && entries.length ? 1 : 0))
     const cost = (): number => {
       const m = make()
-      const h = Math.max(m.d.height, BTN_ROW_H / z) + (m.ld ? Math.max(m.ld.height, BTN_ROW_H / z) : isOpen ? BTN_ROW_H / z : 0)
-      return m.d.source.length + (m.ld?.source.length ?? 0) + backShare(h)
+      const h = Math.max(rowH(m.d), BTN_ROW_H / z) + (m.ld ? Math.max(m.ld.height, BTN_ROW_H / z) : isOpen ? BTN_ROW_H / z : 0)
+      return rowCost(m.d, isLined) + (m.ld?.source.length ?? 0) + icons + backShare(h)
     }
     const put = (): void => {
       const { d, ld } = make()
-      if (!fits(d.source.length + (ld?.source.length ?? 0))) {
+      if (!fits(rowCost(d, isLined) + (ld?.source.length ?? 0) + icons)) {
         height += BTN_ROW_H / z
         parts.push(tooLarge(id))
         return
       }
+      spent += icons
       const icon = iconButton(ui, `log-${id}`, isOpen ? 'logOpen' : 'log', isOpen ? 'Hide the log' : 'Show the log', act($, () => toggleLog($, id)), { ...PANEL_ICON, active: isOpen })
-      height += Math.max(d.height, BTN_ROW_H / z)
-      parts.push(sideRow(ui, `line-${id}`, item(`row-${id}`, d), rightCol(ui, `icons-${id}`, PANEL_COL, [icon])))
+      height += Math.max(rowH(d) + (isLined ? 1 : 0), BTN_ROW_H / z)
+      parts.push(sideRow(ui, `line-${id}`, pair(`row-${id}`, d, isLined), rightCol(ui, `icons-${id}`, PANEL_COL, [icon])))
       if (!isOpen) return
       if (!ld) {
         height += BTN_ROW_H / z
@@ -3147,11 +3472,11 @@ function agentsDesktop($: EngineInterface, ui: SvgKit, s: Snap, columns: number,
     }
     return { id, section, cost, put }
   }
-  // The clock sets a row's loops; the drawing uses it only while the row works or waits.
+  // A row's mascot is stamped with its `born` from the frame (B4); its text with nothing.
   const agentUnit =
     (section: string) =>
     (a: AgentRun): Unit =>
-      rowUnit(a.id, section, () => agentDrawing({ ...rowCtx, enterAgeMs: enterOf(a), clock }, a), { log: a.log, color: agentColor(a), head: cacheLine(a.use) })
+      rowUnit(a.id, section, () => agentDrawing(looked(a.id, rowCtx), a), { log: a.log, color: agentColor(a), head: cacheLine(a.use) })
 
   // The session card: the Session and Plan groups and the usage split, one drawing on the bar's panel across the pane.
   const card = sessionCardDrawing(cardCtx, { main: s.main, agents: s.list, retired: s.retired, usage: s.usage, totals: t, workedMs: mainWorkedMs(s.main, s.at), ...(appPlanNow ? { plan: appPlanNow } : {}) })
@@ -3160,11 +3485,17 @@ function agentsDesktop($: EngineInterface, ui: SvgKit, s: Snap, columns: number,
 
   heading('main', sectionDrawing(ctx, 'Main agent'))
   // The main row's strip shows the plan and how far it got.
-  rowUnit('main', 'main', () => mainDrawing({ ...rowCtx, clock }, s.main, s.running, s.usage, s.flow, s.creep?.start, sorted.waiting.length), {
-    log: s.main.log,
-    color: paletteOf(s.settings).accent,
-    head: cacheLine(s.main.use),
-  }).put()
+  rowUnit(
+    'main',
+    'main',
+    () => mainDrawing(looked('main', rowCtx), s.main, s.running, s.usage, s.flow, s.creep?.start, sorted.waiting.length),
+    {
+      log: s.main.log,
+      color: paletteOf(s.settings).accent,
+      head: cacheLine(s.main.use),
+    },
+    false,
+  ).put()
 
   // The panel's ordered rows, a page at a time; a folded Finished takes none. Each
   // section's heading counts every agent in it and shows with its rows on the page.
@@ -3176,13 +3507,14 @@ function agentsDesktop($: EngineInterface, ui: SvgKit, s: Snap, columns: number,
       key: 'planned',
       text: 'Planned',
       count: planned.length,
-      units: planned.map(p => rowUnit(`plan-${p.n}`, 'planned', () => plannedDrawing(rowCtx, p), { log: null, color: taskColor(p) })),
+      units: planned.map(p => rowUnit(`plan-${p.n}`, 'planned', () => plannedDrawing(looked(`plan-${p.n}`, rowCtx), p), { log: null, color: taskColor(p) })),
     },
     { key: 'finished', text: 'Finished', count: sorted.finished.length, units: isFolded ? [] : sorted.finished.map(agentUnit('finished')) },
   ]
   const heads = new Map(sections.filter(x => x.count).map(x => [x.key, sectionDrawing(x.key === 'finished' ? rowCtx : ctx, x.text, x.count)] as const))
   // Kept back from the rows: every heading, and the backdrop's tiles for what is above them and one more.
-  const reserve = [...heads.values()].reduce((n, d) => n + d.source.length, 0) + backShare(height) + 2 * tileCost
+  // The fold of Finished and Previous and Next under the rows are icons too.
+  const reserve = [...heads.values()].reduce((n, d) => n + d.source.length, 0) + backShare(height) + 2 * tileCost + 3 * ICON_COST
   const units = sections.flatMap(x => x.units)
   const pg = paged(units, reserve)
   for (const x of sections) {
@@ -3236,7 +3568,7 @@ function agentsText($: EngineInterface, ui: Kit, s: Snap, clock: number, panes: 
   const title = s.flow && !s.flow.isFinished ? `${s.flow.title} · ${taskText(s.state, s.flow, s.running)}` : ''
   const sorted = sortAgents(s.list)
   const planned: Planned[] = plannedOf(s.plan, s.list)
-  const summary = `${moneyText(t.costUsd, s, t.isEstimate)} · ${fmtTokens(t.tokens)} tokens · ${fmtTime(t.timeMs)}`
+  const summary = `${moneyText(t.costUsd, s, t.isEstimate)} · ${fmtTokens(t.tokens)} tokens · ${fmtStep(t.timeMs)}`
   // Where the tokens went, once there are any: `Router 38% · Subagents 62%`.
   const shares = splitShares(usageSplit(s.main, s.list, s.retired))
   const icon = { padX: 0, marginY: 0 }
@@ -3294,7 +3626,7 @@ function agentsText($: EngineInterface, ui: Kit, s: Snap, clock: number, panes: 
   const mainLine = `Claude · ${m.status} · ${printable(m.doing) || (m.status === 'resting' ? 'Resting' : 'Working')}`
   const runLine = (a: AgentRun): string =>
     `${STATUS_GLYPHS[a.status]} ${a.description || a.type} · ${agentLabel(a)} · ${a.stepTotal ? `${a.stepDone ?? 0}/${a.stepTotal} · ` : ''}${a.doing}` +
-    ` · ${fmtTokens(useTotal(a.use))} tokens · ≈${money(a.costUsd, s.settings, s.rates)} · ${fmtTime(elapsed(a, s.at))}`
+    ` · ${fmtTokens(useTotal(a.use))} tokens · ≈${money(a.costUsd, s.settings, s.rates)} · ${fmtStep(elapsed(a, s.at))}`
   // The same drawing budget as the desktop panel: a cut section ends with `+N more`.
   const [workingRows, waitingRows, plannedRows, finishedRows] = drawnRows<AgentRun | Planned>([
     sorted.working,
@@ -3475,6 +3807,12 @@ async function beforeRender($: EngineInterface): Promise<void> {
 async function renderAgents($: EngineInterface, e: Parameters<PaneHook>[1]) {
   await beforeRender($)
   const ui = $.ui.resolve(e)
+  // A drawn pane gets idle frames (B11); the closing pane's last draw does not count, unless
+  // it is open again.
+  if (!frames.isPaneClosed || (await isOpenPane($, PANE))) {
+    frames.isPaneDrawn = true
+    frames.isPaneClosed = false
+  }
   // The pane's frame alone (A4); entrances and loops run on the clock as it draws.
   const { s } = await drawnSnap($, 'pane')
   const clock = await clockOf($, s)
@@ -3511,6 +3849,7 @@ async function renderBar($: EngineInterface, e: Parameters<BarHook>[1], next: Pa
   await beforeRender($)
   // The bar's frame alone (A4): its times are the frame's, so they step together (A7).
   const { s, frameClock } = await drawnSnap($, 'bar')
+  frames.isBarDrawn = true
   // This row is drawn with the other mods' bands beneath it. Claude Code's own
   // placeholder ({ type: 'engine' }) is never nested: the desktop drops a band that nests it.
   const drawn = await Promise.resolve(next(e)).catch(() => null)
@@ -3576,6 +3915,12 @@ export const register: Register = (on, options) => {
   appFails = 0
   appAt = 0
   appBusy = false
+  // The frames, the read cache and the held stream start afresh too (CA-3): a load composes
+  // its first frames from what it reads, not from what the load before it last wrote.
+  Object.assign(frames, freshFrames())
+  readCache.clear()
+  writeGens.clear()
+  Object.assign(streamHeld, { isHeld: false, until: 0, gen: 0, doing: '', rows: [], since: null })
   on('session.start', onSessionStart)
   on('classic.SessionStart', onClassicSessionStart)
   on('ui.close', { id: PANE }, onPaneClose)
