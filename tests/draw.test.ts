@@ -79,11 +79,15 @@ const ctxOf = (W: number, o: Partial<Settings> = {}, enterAgeMs?: number): Ctx =
 // moved right by the mascot picture's width, where the row shows them; its alt is the text
 // picture's. `Row` names the shape until hooks/draw.ts exports it.
 type Row = { mascot: Drawing; text: Drawing }
+const partsOf = new WeakMap<Drawing, Row>()
 const one = (d: unknown): Drawing => {
   const r = d as Row
   const dx = r.mascot.width
   const text = r.text.source.replace(/<(text|circle) (x|cx)="(-?[\d.]+)"/g, (_m, tag: string, at: string, v: string) => `<${tag} ${at}="${Math.round((Number(v) + dx) * 100) / 100}"`)
-  return { source: r.mascot.source + text, width: r.mascot.width + r.text.width, height: Math.max(r.mascot.height, r.text.height), alt: r.text.alt }
+  const whole = { source: r.mascot.source + text, width: r.mascot.width + r.text.width, height: Math.max(r.mascot.height, r.text.height), alt: r.text.alt }
+  // `check` reads each picture of a joined row by itself: a picture's header states its own size.
+  partsOf.set(whole, r)
+  return whole
 }
 const textOf = (d: unknown): Drawing => (d as Row).text
 // B2, B7: the mascot picture carries its sprite rules once; the text picture one style block and none.
@@ -251,6 +255,9 @@ function apart(d: Drawing, what: string): void {
 
 function check(d: Drawing | null, what: string): void {
   if (!d) return
+  // A row joined by `one`: each of its pictures is checked by itself, against its own size.
+  const parts = partsOf.get(d)
+  if (parts) return void (check(parts.mascot, `${what} (mascot)`), check(parts.text, `${what} (text)`))
   const problem = wellFormed(d.source)
   expect(problem === null ? 'ok' : `${what}: ${problem}`).toBe('ok')
   expect(d.source.length).toBeLessThan(131_073)
@@ -1992,8 +1999,11 @@ describe('the hero card behind each mascot', () => {
             expect(Object.keys(card.attrs).sort(), `${label}: the card's attributes`).toEqual(what === 'planned' ? ['class', 'opacity', 'transform'] : ['class', 'transform'])
             if (what === 'planned') expect(card.attrs.opacity, label).toBe('0.45')
             const e = expected(what, W, iconSize, d.height)
-            expect([card.x, card.y, card.k], `${label}: the card's place`).toEqual([r2(e.cx), r2(e.cy), e.k])
-            expect(card.attrs.transform, label).toBe(`translate(${r2(e.cx)},${r2(e.cy)}) scale(${e.k})`)
+            // 2.5.0 (B4): the card's height in its picture is the mascot picture's own, never the row's: it sits at the
+            // left, on whole pixels, inside the mascot picture; where that picture sits in the row is the pane's.
+            const box = partsOf.get(d)?.mascot
+            expect([card.x, card.k, Number.isInteger(card.y), card.y >= 0 && card.y + 32 * e.k <= (box?.height ?? 0) + 0.01], `${label}: the card's place`).toEqual([r2(e.cx), e.k, true, true])
+            expect(card.attrs.transform, label).toBe(`translate(${r2(e.cx)},${r2(card.y)}) scale(${e.k})`)
             if (e.compactH !== undefined) expect(d.height, `${label}: compact height`).toBe(e.compactH)
             const m = mascotOf(d.source)
             expect(m === null ? `${label}: no mascot` : 'ok').toBe('ok')
