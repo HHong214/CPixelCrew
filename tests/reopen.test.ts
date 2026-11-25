@@ -5,13 +5,14 @@
 // must equal the twin's. A test can hold one engine only, so the twin runs as the test just
 // before its scenario and leaves what it saw in `TWINS`; the scenario compares with it. Events
 // go in; what comes out is each `state.set` of the mod's values and a mounted pane or bar.
-// No test reads the mark the close leaves on a row (C1).
+// No test reads the mark the close leaves on a row (C1); the C12 tests store `lost` (its name
+// is fixed by C12) and check only that a mark that does not fit is gone after the next event.
 
 import { expect, mock, test } from 'claude-code/testing'
 import type { Engine, Mounted } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { AgentRun, MainRun } from '../types'
-import { STUCK_MS } from '../hooks/model'
+import { STUCK_MS, runQuiet } from '../hooks/model'
 
 const PLUGIN = 'CPixelCrew'
 const STEP = 'mcp__CPixelCrew__step'
@@ -554,3 +555,128 @@ test('C8, as in 2.5.0: a row the sync closes because the list says completed sta
   expect(row?.doing).toBe('Finished')
   expect(row?.endedAt).toBeDefined()
 })
+
+// ---------------------------------------------------------------------------
+// C12: a mark that no longer fits. Each scenario runs twice from stored state: first with the
+// row as stored but no `lost` field ([plain]), then with `lost` on it; after the event the row
+// must equal the plain one in every field `AgentRun` declares, `activeAt` included, and carry
+// no `lost` field. A test can hold one engine only, so the plain run leaves its row in `PLAIN`.
+
+// What closeLost writes today on the row it closes (the C4 stored row, closed by the sync at T0 + 5 s).
+const TODAY_MARK = { status: 'running', doing: 'Reading long.ts', doingSince: QUIET_START, open: [1] }
+// A row ended by its own turn.complete, its end line last (as the mod writes it on today's build).
+const DONE_ROW: AgentRun = {
+  ...STORED_ROW,
+  kind: 'refactor',
+  status: 'done',
+  startedAt: T0,
+  endedAt: T0 + 3_000,
+  doing: 'Finished',
+  doingSince: T0 + 3_000,
+  activeAt: T0,
+  log: [
+    { at: T0, kind: 'note', text: 'Started as Refactor on Haiku 4.5', outcome: 'ok' },
+    { at: T0, kind: 'tool', text: 'Reading long.ts', outcome: 'ok', callId: 'tu-long', ms: 0 },
+    { at: T0 + 3_000, kind: 'end', text: 'Finished in 0:03', outcome: 'ok', ms: 3_000 },
+  ],
+}
+// A live running row, active at T0, so the sync does not close it within the test.
+const RUNNING_ROW: AgentRun = {
+  ...STORED_ROW,
+  startedAt: T0 - 60_000,
+  doing: 'Reading a.ts',
+  doingSince: T0 - 2_000,
+  activeAt: T0,
+  log: [
+    { at: T0 - 60_000, kind: 'note', text: 'Started as Build on Haiku 4.5', outcome: 'ok' },
+    { at: T0 - 2_000, kind: 'tool', text: 'Reading a.ts', outcome: 'ok', callId: 'tu-a', ms: 2_000 },
+  ],
+}
+// The C4 stored row exactly as the sync's close leaves it on today's build, less its mark.
+const CLOSED_ROW: AgentRun = {
+  ...STORED_ROW,
+  status: 'failed',
+  endedAt: T0 + 5_000,
+  doing: 'Failed',
+  doingSince: T0 + 5_000,
+  log: [
+    { at: QUIET_START, kind: 'note', text: 'Started as Build on Haiku 4.5', outcome: 'ok' },
+    { at: QUIET_START, kind: 'tool', text: 'Reading long.ts', outcome: 'error', callId: 'tu-long', ms: 965_000 },
+    { at: T0 + 5_000, kind: 'end', text: END_LINE, outcome: 'error', ms: 965_000 },
+  ],
+}
+
+const C12_FIELDS = [...FIELDS, 'activeAt'] as const
+const PLAIN = new Map<string, Record<string, unknown>>()
+
+// `event` may answer the row to compare (one it saw before the scenario ended), else the last row written is compared.
+function markWays(name: string, row: AgentRun, mark: unknown, event: ($: Engine, w: World) => Promise<AgentRun | undefined | void>): void {
+  for (const isPlain of [true, false]) {
+    test(isPlain ? `${name} [plain: no lost field]` : name, { timeoutMs: 60_000 }, async ($, on) => {
+      const stored = isPlain ? row : ({ ...row, lost: mark } as unknown as AgentRun)
+      const w = await boot($, on, { junk: { agents: [stored] } })
+      await w.clock.advance(6_000)
+      const answered = await event($, w)
+      await w.clock.settle()
+      // No write of `agents` at all: the stored row is what the mod still holds (the event's change was lost).
+      const r = (answered ?? rowOf(w) ?? (w.writes.some(x => x.key === 'agents') ? undefined : stored)) as unknown as Record<string, unknown> | undefined
+      expect(r).toBeDefined()
+      const seen: Record<string, unknown> = {}
+      for (const f of C12_FIELDS) if (r && r[f] !== undefined) seen[f] = r[f]
+      if (isPlain) {
+        PLAIN.set(name, seen)
+        return
+      }
+      const ref = PLAIN.get(name)
+      if (!ref) throw new Error(`the plain run of "${name}" did not run before it`)
+      expect(seen.status).toBe(ref.status)
+      expect(seen.doing).toBe(ref.doing)
+      expect(seen.endedAt).toBe(ref.endedAt)
+      expect(seen.log).toEqual(ref.log)
+      expect(seen).toEqual(ref)
+      expect(Object.hasOwn(r ?? {}, 'lost')).toBe(false)
+    })
+  }
+}
+
+const onStep = async ($: Engine): Promise<void> => agentStep($, 'a1')
+// A tool call of the agent, compared while it is still open; then it ends.
+const onCallStart = async ($: Engine, w: World): Promise<AgentRun | undefined> => {
+  const held = await holdCall($, w, '/repo/next.ts', 'a1', 'tu-next', w.clock.now() + 500)
+  await w.clock.settle()
+  const atStart = rowOf(w)
+  await held.release()
+  return atStart
+}
+const onCallEnd = async ($: Engine, w: World): Promise<void> => {
+  await readFile($, '/repo/next.ts', 'a1', 'tu-next')
+}
+
+markWays('C12: a stored done row that carries a mark of today\'s shape: turn.step changes it as a row with no lost field', DONE_ROW, TODAY_MARK, onStep)
+markWays('C12: a stored done row that carries a mark of today\'s shape: a tool call starting changes it as a row with no lost field', DONE_ROW, TODAY_MARK, onCallStart)
+markWays('C12: a stored running row that carries a mark of today\'s shape: turn.step changes it as a row with no lost field', RUNNING_ROW, TODAY_MARK, onStep)
+markWays('C12: a stored running row that carries a mark of today\'s shape: a tool call starting changes it as a row with no lost field', RUNNING_ROW, TODAY_MARK, onCallStart)
+
+const JUNK_MARKS: [string, unknown][] = [
+  ['{}', {}],
+  ['5', 5],
+  ["'x'", 'x'],
+  ['[]', []],
+  ['null', null],
+  ['wrong types inside', { status: 'done', doing: 1, doingSince: 'x', open: 'y' }],
+]
+for (const [label, mark] of JUNK_MARKS) {
+  markWays(`C12: a closed row whose mark is ${label}: turn.step changes it as a row with no lost field`, CLOSED_ROW, mark, onStep)
+  markWays(`C12: a closed row whose mark is ${label}: a tool call starting changes it as a row with no lost field`, CLOSED_ROW, mark, onCallStart)
+  markWays(`C12: a closed row whose mark is ${label}: a tool call ending changes it as a row with no lost field`, CLOSED_ROW, mark, onCallEnd)
+}
+
+// C12, pure: the run does not count a live row whose mark does not fit among its stuck ids.
+for (const [label, mark] of [['{}', {}], ['null', null], ["today's shape", TODAY_MARK]] as [string, unknown][]) {
+  test(`C12: runQuiet counts a live running row that carries ${label} as lost among live and not among stuck`, async () => {
+    const row = { ...RUNNING_ROW, lost: mark } as unknown as AgentRun
+    const q = runQuiet({ startedAt: T0 - 60_000, ids: ['a1'], high: 0 }, [row], T0 + 1_000)
+    expect(q.live).toEqual(['a1'])
+    expect(q.stuck).toEqual([])
+  })
+}
