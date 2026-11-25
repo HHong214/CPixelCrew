@@ -1546,7 +1546,7 @@ export function reopenedFlow(flow: Flow | null, input: ProgressInput | null): Fl
 // Runs: with no plan on, the bar counts every subagent of the run, `Agents d/n`, and its
 // fill creeps forward while they work, so it moves between the events that finish them.
 
-/** An active agent with no tool call, model request, step or status change for this long counts as ended for its run. */
+/** An active agent with no tool call, model request, step or status change for this long counts as ended for its run, unless it waits for approval (`WAIT_STUCK_MS`). */
 export const STUCK_MS = 15 * 60_000
 /** A plan unfinished and unreported for this long gives way to the run. */
 export const PLAN_STALE_MS = 30 * 60_000
@@ -1571,9 +1571,6 @@ export function lastActiveOf(a: AgentRun): number {
   return Math.max(num(a.startedAt) ?? 0, num(a.doingSince) ?? 0, num(a.stepAt) ?? 0, num(a.activeAt) ?? 0, num(log[log.length - 1]?.at) ?? 0)
 }
 
-/** Active, but quiet for `STUCK_MS`: its end was most likely missed. The list still shows it. */
-export const isStuck = (a: AgentRun, now: number): boolean => isActiveRun(a) && Number.isFinite(now) && now - lastActiveOf(a) >= STUCK_MS
-
 /** What a row says while it waits for the person's approval; only a permission request sets it. */
 export const APPROVAL = 'Waiting for your approval: '
 /** A row that waits for approval is spared the 15-minute rule until it has been quiet this long. */
@@ -1581,8 +1578,9 @@ export const WAIT_STUCK_MS = 12 * 60 * 60_000
 
 /**
  * Active and quiet for `STUCK_MS`, or for `WAIT_STUCK_MS` when it waits for approval
- * (`waiting`, its line starting `APPROVAL`): the sync closes such a row when its agent is
- * not listed. The run still counts a row quiet for `STUCK_MS` as over (`isStuck`).
+ * (`waiting`, its line starting `APPROVAL`): its end was most likely missed, and the sync
+ * closes such a row when its agent is not listed. The run counts such a row as over too
+ * (`isLive`); the list still shows it.
  */
 export function isLost(a: AgentRun, now: number): boolean {
   if (!isActiveRun(a) || !Number.isFinite(now)) return false
@@ -1590,8 +1588,8 @@ export function isLost(a: AgentRun, now: number): boolean {
   return now - lastActiveOf(a) >= (isApproval ? WAIT_STUCK_MS : STUCK_MS)
 }
 
-/** Active and not stuck: what a run waits for. */
-export const isLive = (a: AgentRun, now: number): boolean => isActiveRun(a) && !isStuck(a, now)
+/** Active and not lost (`isLost`): what a run waits for. A row that waits for approval is live for up to `WAIT_STUCK_MS`, any other active row for `STUCK_MS`. */
+export const isLive = (a: AgentRun, now: number): boolean => isActiveRun(a) && !isLost(a, now)
 
 /**
  * How much of its own task an agent has done, 0 to 1. With steps reported: the steps
@@ -1640,7 +1638,7 @@ export function closedRun(run: Run | null, list: AgentRun[], now: number, at: nu
 export type RunCounts = { n: number; d: number; live: AgentRun[]; title: string }
 
 /**
- * `n` agents started in the run and `d` of them over (done, failed, stuck, or no longer
+ * `n` agents started in the run and `d` of them over (done, failed, lost, or no longer
  * listed), the live ones, and the title: the description of the most recently started
  * agent still active, else of the most recently started one. An ended run is all over.
  */
@@ -1677,12 +1675,12 @@ export function isMarked(a: AgentRun): boolean {
   )
 }
 
-/** The run's agents active but stuck, and those live, by id. A row the 15-minute rule closed (it bears a mark that fits) counts stuck until its agent's next event reopens it. */
+/** The run's agents lost (`isLost`) and those live, by id. A row the 15-minute rule closed (it bears a mark that fits) counts stuck until its agent's next event reopens it. */
 export function runQuiet(run: Run | null, list: AgentRun[], now: number): { stuck: string[]; live: string[] } {
   const ids = run && Array.isArray(run.ids) ? run.ids : []
   const rows = new Map((Array.isArray(list) ? list : []).map(a => [a.id, a]))
   const mine = ids.map(id => rows.get(id)).filter((a): a is AgentRun => a !== undefined)
-  return { stuck: mine.filter(a => isStuck(a, now) || isMarked(a)).map(a => a.id), live: mine.filter(a => isLive(a, now)).map(a => a.id) }
+  return { stuck: mine.filter(a => isLost(a, now) || isMarked(a)).map(a => a.id), live: mine.filter(a => isLive(a, now)).map(a => a.id) }
 }
 
 /** The run's fill: the agents over, plus how far each live one has got, over all of them. */
