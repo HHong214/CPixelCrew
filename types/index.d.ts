@@ -96,10 +96,13 @@ export type LogEntry = {
 export type RunStatus = 'running' | 'waiting' | 'done' | 'failed'
 
 /**
- * The mark of a row the 15-minute rule closed: the status, the doing line and its time as
- * they were before the close, and which log entries it closed (never a copy of the log).
+ * The mark of a row the 15-minute rule closed: the time of the close, the status, the doing
+ * line and its time as they were before the close, and which log entries it closed (never a
+ * copy of the log). It counts only while the row is still as the close left it (`isMarked`).
  */
 export type Lost = {
+  /** The time of the close: the row's `endedAt` while the mark fits it. */
+  at: number
   /** The status before the close: `waiting` for a row that waited for approval. */
   status: 'running' | 'waiting'
   doing: string

@@ -1655,12 +1655,34 @@ export function runCounts(run: Run | null, list: AgentRun[], now: number): RunCo
   return { n: ids.length, d: ids.length - live.length, live, title: lead ? lead.description || lead.type || '' : '' }
 }
 
-/** The run's agents active but stuck, and those live, by id. A row the 15-minute rule closed (it bears the mark) counts stuck until its agent's next event reopens it. */
+/**
+ * True when the row bears a mark of the 15-minute rule's close that still fits it (C12): the
+ * row is `failed`, ended at the time the mark keeps, and the mark has the shape of `Lost`.
+ * The one test every place asks: a row an older version ran or ended again while it bore a
+ * mark, and a row with junk in the field, bear none, whatever the field holds.
+ */
+export function isMarked(a: AgentRun): boolean {
+  const mark: unknown = a.lost
+  if (a.status !== 'failed' || typeof a.endedAt !== 'number' || !Number.isFinite(a.endedAt)) return false
+  if (typeof mark !== 'object' || mark === null || Array.isArray(mark)) return false
+  const m = mark as Record<string, unknown>
+  return (
+    m.at === a.endedAt &&
+    (m.status === 'running' || m.status === 'waiting') &&
+    typeof m.doing === 'string' &&
+    typeof m.doingSince === 'number' &&
+    Number.isFinite(m.doingSince) &&
+    Array.isArray(m.open) &&
+    m.open.every(n => typeof n === 'number' && Number.isInteger(n) && n >= 1)
+  )
+}
+
+/** The run's agents active but stuck, and those live, by id. A row the 15-minute rule closed (it bears a mark that fits) counts stuck until its agent's next event reopens it. */
 export function runQuiet(run: Run | null, list: AgentRun[], now: number): { stuck: string[]; live: string[] } {
   const ids = run && Array.isArray(run.ids) ? run.ids : []
   const rows = new Map((Array.isArray(list) ? list : []).map(a => [a.id, a]))
   const mine = ids.map(id => rows.get(id)).filter((a): a is AgentRun => a !== undefined)
-  return { stuck: mine.filter(a => isStuck(a, now) || a.lost !== undefined).map(a => a.id), live: mine.filter(a => isLive(a, now)).map(a => a.id) }
+  return { stuck: mine.filter(a => isStuck(a, now) || isMarked(a)).map(a => a.id), live: mine.filter(a => isLive(a, now)).map(a => a.id) }
 }
 
 /** The run's fill: the agents over, plus how far each live one has got, over all of them. */

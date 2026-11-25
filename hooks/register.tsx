@@ -66,6 +66,7 @@ import {
   closedRun,
   fitRows,
   isLost,
+  isMarked,
   LIVE_LOG,
   drawnRows,
   contextGauge,
@@ -561,7 +562,7 @@ function closeLost(a: AgentRun, at: number): AgentRun {
     doing: 'Failed',
     doingSince: at,
     log: [...closeAll(log, at, 'error'), logEntry(at, 'end', LOST_TEXT, 'error', Math.max(0, at - a.startedAt))],
-    lost: { status: a.status === 'waiting' ? 'waiting' : 'running', doing: a.doing, doingSince: a.doingSince, open },
+    lost: { at, status: a.status === 'waiting' ? 'waiting' : 'running', doing: a.doing, doingSince: a.doingSince, open },
   }
 }
 
@@ -569,16 +570,18 @@ function closeLost(a: AgentRun, at: number): AgentRun {
 // undone, as if the row had never been closed. The status, the doing line and its time are
 // back; the end line is out of the log and each entry the close closed is open again (one a
 // cut has taken from the log is skipped); the mark is gone; and the row is quiet no more
-// from `at`, the time of the event (C7). The same row when it bears no mark.
+// from `at`, the time of the event (C7). A row whose mark does not fit it (`isMarked`) is not
+// reopened: it only loses the field, and is then changed as a row that never had one (C12).
+// The same row when it has no mark.
 function reopened(a: AgentRun, at: number): AgentRun {
-  const mark = a.lost
-  if (!mark) return a
+  if (!isMarked(a)) return unmarked(a)
+  const mark = a.lost!
   let log = logOf(a)
   const tail = log.at(-1)
   // The close left its end line last, and nothing wrote to the row since; only then do the distances hold.
   if (tail && tail.kind === 'end' && tail.text === LOST_TEXT && tail.at === a.endedAt) {
     log = log.slice(0, -1)
-    for (const back of Array.isArray(mark.open) ? mark.open : []) {
+    for (const back of mark.open) {
       const i = log.length - back
       const closed = log[i]
       if (i < 0 || !closed || closed.outcome !== 'error') continue
@@ -698,7 +701,11 @@ async function put<T>($: EngineInterface, a: Atom<T>, fn: (v: T) => T): Promise<
       same = null
       return next
     })) as T
-    writeGens.set(a.ref.key, (writeGens.get(a.ref.key) ?? 0) + 1)
+    // K1: what was written is what the read cache holds from now on, so no composition reads
+    // through `$` (at a moment that may be older than this write) a value this load wrote.
+    const gen = (writeGens.get(a.ref.key) ?? 0) + 1
+    writeGens.set(a.ref.key, gen)
+    readCache.set(a.ref.key, { gen, value: out, epoch: live.ticks })
     framesStale($)
     return out
   } catch (err) {
@@ -768,7 +775,7 @@ async function updateRun($: EngineInterface, agentId: string, change: (a: AgentR
 async function updateAgent($: EngineInterface, agentId: string, at: number, change: (a: AgentRun) => AgentRun): Promise<boolean> {
   let isReopened = false
   const isFound = await updateRun($, agentId, a => {
-    isReopened = a.lost !== undefined
+    isReopened = isMarked(a)
     return change(reopened(a, at))
   })
   if (isFound && isReopened) {
@@ -824,6 +831,12 @@ const freshFrames = () => ({
   /** The pane's mascots and the bar's progress row as last composed (B4, B5, B10). */
   looks: {} as Record<string, Look>,
   hold: null as Hold | null,
+  /** L1: the version this load's last write of each frame answered; null when it holds none (not written yet, or lost). */
+  paneVersion: null as number | null,
+  barVersion: null as number | null,
+  /** L2: a write of the frame missed, so another copy holds it: no composition writes it until a tick takes it back (L3). */
+  isPaneLost: false,
+  isBarLost: false,
 })
 const frames = freshFrames()
 
@@ -848,12 +861,17 @@ function queueFrames($: EngineInterface, ms: number): void {
   }
 }
 
+// What a composition the tick starts is told: it reads the values afresh, those the tick
+// read itself as the tick read them (K2), and, once the tick has taken a lost frame back, it
+// is not held (L3). Every other composition (a timer's, a press's, a draw's) is told nothing.
+type Pull = { epoch: number; isForced: boolean }
+
 // Composes and writes the frames when out of date and not held; `at`, the clock when known.
-async function flushFrames($: EngineInterface, at?: number): Promise<void> {
+async function flushFrames($: EngineInterface, at?: number, pull?: Pull): Promise<void> {
   if (!frames.isStale) return
   const now = at ?? (await $.clock.now().catch(() => Infinity))
-  if (now < frames.heldUntil) return queueFrames($, frames.heldUntil - now)
-  await writeFrames($)
+  if (now < frames.heldUntil && !pull?.isForced) return queueFrames($, frames.heldUntil - now)
+  await writeFrames($, pull)
   if (frames.isStale) queueFrames($, frames.heldUntil - now)
 }
 
@@ -862,16 +880,49 @@ async function framesNow($: EngineInterface): Promise<void> {
   await writeFrames($)
 }
 
+// L3: a frame lost to another copy (L2) is taken back by the tick and by nothing else: its
+// version is read afresh and held, so the next composition writes the frame on it (L1), and
+// its last text is forgotten so that composition finds it due. True when a frame was taken
+// back. A read that throws leaves the frame lost for the next tick. An unloaded copy no
+// longer ticks, so it never gets here.
+async function takeBackFrames($: EngineInterface): Promise<boolean> {
+  let isBack = false
+  if (frames.isPaneLost) {
+    try {
+      frames.paneVersion = (await $.state.get({ plugin: 'CPixelCrew', key: 'paneFrame' })).version
+      frames.isPaneLost = false
+      frames.pane = ''
+      isBack = true
+    } catch {
+      // Lost until the next tick.
+    }
+  }
+  if (frames.isBarLost) {
+    try {
+      frames.barVersion = (await $.state.get({ plugin: 'CPixelCrew', key: 'barFrame' })).version
+      frames.isBarLost = false
+      frames.bar = ''
+      isBack = true
+    } catch {
+      // Lost until the next tick.
+    }
+  }
+  return isBack
+}
+
 // Composes both frames from one read and writes each whose site would show something else;
 // true when either was written, which holds them for FRAME_MS. A composition or a write that
-// fails leaves them out of date, tried again a second on (CA-4).
-function writeFrames($: EngineInterface): Promise<boolean> {
+// fails leaves them out of date, tried again a second on (CA-4). Each write is conditional on
+// the version this load last held of that frame (L1): a miss means another copy wrote it, and
+// the frame stays unwritten here until the tick takes it back (L2, L3). The two frames are
+// fenced apart: losing one stops only that one.
+function writeFrames($: EngineInterface, pull?: Pull): Promise<boolean> {
   const run = async (): Promise<boolean> => {
     frames.isStale = false
     let at = NaN
     try {
       at = await $.clock.now()
-      const c = await composeSnap($)
+      const c = await composeSnap($, pull?.epoch)
       const clock = c.clock
       frames.composedAt = clock
       frames.minute = Math.floor(clock / 60_000)
@@ -890,18 +941,35 @@ function writeFrames($: EngineInterface): Promise<boolean> {
       // Idle, a pane not drawn (never, or closed since) gets no frame: its next draw composes one (B11).
       const isPaneDue = paneJson !== frames.pane
       frames.isPaneBehind = isPaneDue && !c.isBusy && !frames.isPaneDrawn
-      if (isPaneDue && !frames.isPaneBehind) {
-        await $.state.set({ plugin: 'CPixelCrew', key: 'paneFrame' }, { shape: FRAME_SHAPE, value: pane })
-        frames.pane = paneJson
-        isWritten = true
+      if (isPaneDue && !frames.isPaneBehind && !frames.isPaneLost) {
+        // The first write of the load stands on the version read just before it; a write that
+        // throws keeps the version held, so a write that did land makes the next one miss.
+        frames.paneVersion ??= (await $.state.get({ plugin: 'CPixelCrew', key: 'paneFrame' })).version
+        const r = await $.state.set({ plugin: 'CPixelCrew', key: 'paneFrame' }, { shape: FRAME_SHAPE, value: pane }, { ifVersion: frames.paneVersion })
+        if (r.isSet) {
+          frames.paneVersion = r.version
+          frames.pane = paneJson
+          isWritten = true
+        } else {
+          frames.paneVersion = null
+          frames.isPaneLost = true
+        }
       }
       // Idle, a bar not drawn since the load gets no frame: the first draw composes one (A-d2).
       const isBarDue = barJson !== frames.bar
       frames.isBarBehind = isBarDue && !c.isBusy && !frames.isBarDrawn
-      if (isBarDue && !frames.isBarBehind) {        await $.state.set({ plugin: 'CPixelCrew', key: 'barFrame' }, { shape: FRAME_SHAPE, value: bar })
-        frames.bar = barJson
-        frames.barClock = bar.clock
-        isWritten = true
+      if (isBarDue && !frames.isBarBehind && !frames.isBarLost) {
+        frames.barVersion ??= (await $.state.get({ plugin: 'CPixelCrew', key: 'barFrame' })).version
+        const r = await $.state.set({ plugin: 'CPixelCrew', key: 'barFrame' }, { shape: FRAME_SHAPE, value: bar }, { ifVersion: frames.barVersion })
+        if (r.isSet) {
+          frames.barVersion = r.version
+          frames.bar = barJson
+          frames.barClock = bar.clock
+          isWritten = true
+        } else {
+          frames.barVersion = null
+          frames.isBarLost = true
+        }
       }
       // Kept once written or unchanged: a failed write composes them again next time.
       frames.hold = hold
@@ -1817,8 +1885,17 @@ async function tick($: EngineInterface): Promise<void> {
     const at = await $.clock.now()
     // The app's usage windows, at most every 5 minutes; not awaited, the clocks go on.
     if (appFails < APP_MAX_FAILS && !appBusy && at - appAt >= APP_EVERY_MS) void refreshAppUsage($)
+    // K2: the composition this tick starts reads every value afresh (`pull.epoch`), and takes
+    // `main` and `agents` as the tick read them here (a write of this load since wins).
+    const genMain = writeGens.get('main') ?? 0
+    const genAgents = writeGens.get('agents') ?? 0
     const m = await read($, mainState)
-    const list = cleanRows(await read($, agentsState))
+    const rawAgents = await read($, agentsState)
+    seedRead('main', genMain, m)
+    seedRead('agents', genAgents, rawAgents)
+    const list = cleanRows(rawAgents)
+    // L3: a frame lost to another copy is taken back here, and written whether or not anything is due.
+    const pull: Pull = { epoch: live.ticks, isForced: await takeBackFrames($) }
     const isBusy = (isRecord(m) && typeof m.turnStartedAt === 'number') || list.some(isActive)
     if (isBusy) {
       // The clocks of whatever runs: the frames are composed again with this second's time,
@@ -1827,19 +1904,24 @@ async function tick($: EngineInterface): Promise<void> {
       await holdFill($, at, list)
       await streamDue($, at).catch(() => undefined)
       frames.isStale = true
-      await flushFrames($, at)
+      await flushFrames($, at, pull)
     } else {
       // Idle (A7): the tick writes no value and invalidates nothing. The frames are composed
       // again when the bar's cache countdown steps (once a minute, once a second in the last
       // five, then once to show it expired, and no more: CA-1), when the pane's minute turns
       // (B11) and when a finished or resting picture is due to hold still (B10).
+      const genUsage = writeGens.get('usage') ?? 0
       const u = await read($, usageState)
+      seedRead('usage', genUsage, u)
       const s = settingsNow()
       const expires = isRecord(u) && typeof u.cacheExpiresAt === 'number' ? u.cacheExpiresAt : null
       const isCacheDue = s.barItems.includes('cache') && expires !== null && frames.barClock < expires && barClockOf(at, expires) !== frames.barClock
       // The pane only while one is open and has been drawn (B11): a closed pane counts nothing.
       const isPaneDue = frames.isPaneDrawn && (Math.floor(at / 60_000) !== frames.minute || at >= frames.dueAt)
-      if (isCacheDue || isPaneDue || at >= frames.barDueAt) framesStale($)
+      if (isCacheDue || isPaneDue || at >= frames.barDueAt || pull.isForced) {
+        frames.isStale = true
+        await flushFrames($, at, pull)
+      }
     }
     if (list.some(isActive) && live.ticks % SYNC_EVERY === 0) await syncAgents($)
   } catch {
@@ -1860,7 +1942,8 @@ async function syncAgents($: EngineInterface): Promise<void> {
       const s = a.agentId === undefined ? undefined : status.get(a.agentId)
       if (s === undefined) {
         // A3: quiet for STUCK_MS (12 hours when it waits for approval) and not listed (or never
-        // given an id): its end was missed. Its agent's next event reopens it (C3).
+        // given an id): its end was missed. Its agent's next event reopens it (C3); a row with
+        // no agent id is reached by no event, so it stays closed.
         if (!isLost(a, at)) return a
         hasEnded = true
         isChanged = true
@@ -2102,13 +2185,13 @@ async function onProgress($: EngineInterface, e: In<'tool.call'>) {
       return { result: `ok: ${flowLabel(merged)}${renamedNote(input, merged)}` }
     }
     const isNew = title !== '' && (prev === null || prev.isFinished || mergeFlow(prev, input).title !== prev.title)
-    // A new flow starts with a clean list; the runs still going stay, and what the others
+    // A new flow starts with a clean list; the runs still going stay, and so does a row the 15-minute rule closed, whose agent may yet come back (C13); what the others
     // spent stays in the session's totals.
     if (isNew) {
       let gone: AgentRun[] = []
       await putAgents($, list => {
-        gone = list.filter(a => !isActive(a))
-        return gone.length ? list.filter(isActive) : list
+        gone = list.filter(a => !isActive(a) && !isMarked(a))
+        return gone.length ? list.filter(a => isActive(a) || isMarked(a)) : list
       })
       await retireRows($, gone)
     }
@@ -2669,38 +2752,49 @@ type Raw = { flow?: unknown; run?: unknown; agents?: unknown; retired?: unknown;
 // Reads the bookkeeping values and composes the snap both frames are cut from, at the clock now.
 // `isBusy`: the main loop works or an agent is active: the bar's time runs to the ms and the
 // pane's times are read at the clock, not at its whole minute.
-// The read cache: what composing last read of each value, with the count of this load's own
-// writes to it through `put` at that read. A value is read again only after `put` wrote it;
-// a change made any other way is not seen until then. `register` empties both maps, so
-// a new load reads every value afresh (CA-3).
-const readCache = new Map<string, { gen: number; value: unknown }>()
+// The read cache: what composing last read of each value, or this load last wrote of it
+// through `put` (K1), with the count of this load's own writes to it at that moment and the
+// tick count then (`epoch`). A value is read again only after `put` wrote it, or when a
+// composition the tick starts asks for it afresh (K2); a change made any other way is not
+// seen until then. `register` empties both maps, so a new load reads every value afresh (CA-3).
+const readCache = new Map<string, { gen: number; value: unknown; epoch: number }>()
 const writeGens = new Map<string, number>()
 
-async function cachedRead(key: string, get: () => Promise<unknown>, fallback: unknown): Promise<unknown> {
+// `epoch`: the tick that starts the composition. An entry stored before that tick began is
+// not used, so the value is read afresh (K2); one the tick stored itself (what it read of
+// `main`, `agents` and `usage`, see `seedRead`) or this load wrote since is.
+async function cachedRead(key: string, get: () => Promise<unknown>, fallback: unknown, epoch?: number): Promise<unknown> {
   const gen = writeGens.get(key) ?? 0
   const hit = readCache.get(key)
-  if (hit && hit.gen === gen) return hit.value
+  if (hit && hit.gen === gen && (epoch === undefined || hit.epoch >= epoch)) return hit.value
   try {
     const value = await get()
-    if ((writeGens.get(key) ?? 0) === gen) readCache.set(key, { gen, value })
+    if ((writeGens.get(key) ?? 0) === gen) readCache.set(key, { gen, value, epoch: live.ticks })
     return value
   } catch {
     return fallback
   }
 }
 
-async function composeSnap($: EngineInterface): Promise<{ snap: FrameSnap; clock: number; isBusy: boolean }> {
+// What the tick read itself is put in the read cache, so the composition it starts uses that
+// and no value is read twice in one tick (K2); `gen` is the count of this load's writes to
+// the value before the tick read it, and a write since wins.
+function seedRead(key: string, gen: number, value: unknown): void {
+  if ((writeGens.get(key) ?? 0) === gen) readCache.set(key, { gen, value, epoch: live.ticks })
+}
+
+async function composeSnap($: EngineInterface, epoch?: number): Promise<{ snap: FrameSnap; clock: number; isBusy: boolean }> {
   const [flow, run, agents, retired, main, usage, view, rates, now, model, clock] = await Promise.all([
-    cachedRead('flow', () => read($, flowState), null),
-    cachedRead('run', () => read($, runState), null),
-    cachedRead('agents', () => read($, agentsState), []),
+    cachedRead('flow', () => read($, flowState), null, epoch),
+    cachedRead('run', () => read($, runState), null, epoch),
+    cachedRead('agents', () => read($, agentsState), [], epoch),
     // State from an older version has no tally: zero.
-    cachedRead('retired', () => read($, retiredState), null),
-    cachedRead('main', () => read($, mainState), null),
-    cachedRead('usage', () => read($, usageState), null),
-    cachedRead('view', () => read($, viewState), null),
-    cachedRead('rates', () => read($, ratesState), null),
-    cachedRead('now', () => read($, nowState), 0),
+    cachedRead('retired', () => read($, retiredState), null, epoch),
+    cachedRead('main', () => read($, mainState), null, epoch),
+    cachedRead('usage', () => read($, usageState), null, epoch),
+    cachedRead('view', () => read($, viewState), null, epoch),
+    cachedRead('rates', () => read($, ratesState), null, epoch),
+    cachedRead('now', () => read($, nowState), 0, epoch),
     // The model the session runs on now, which `/model` changes without an event.
     $.session.model().catch(() => ''),
     $.clock.now().catch(() => 0),
