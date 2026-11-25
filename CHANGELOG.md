@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.5.3 (2026-11-25)
+
+### Fixed
+
+- In the desktop app two invisible spacers were never drawn: like the characters in 2.5.2, they were handed to the app with an empty description (`alt`), and the app drops such a picture. So the 12 px kept free for the scroll bar at the right edge of the agents, settings and guide panes was not held, and a control at a row's right end could sit in that room. And where a control is left out (the Previous arrow on the first page of a long list), its place was not kept, so the control beside it could sit one icon to the side. Both spacers now carry the description `Spacer`.
+
 ## 2.5.2 (2026-11-25)
 
 ### Fixed

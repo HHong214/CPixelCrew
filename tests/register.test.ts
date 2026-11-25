@@ -1274,8 +1274,8 @@ test('desktop: the compact panel is the small card, a line for Claude and each a
   await endAgent($, 'a2', 'error')
   const p = await pane($, 'desktop')
   await p.press({ key: 'toggle-compact' })
-  // The scroll-bar gutter's empty drawing aside.
-  const alts = (await p.findAll({ type: 'Svg' })).map(x => String(x.props.alt)).filter(a => a)
+  // The scroll-bar gutter's invisible drawing (alt Spacer) aside.
+  const alts = (await p.findAll({ type: 'Svg' })).map(x => String(x.props.alt)).filter(a => a && a !== 'Spacer')
   // After the title row's drawing and its three icons: the card, then each line's mascot and its text (side by side, mascot first): Claude, the agent at work; then the counts.
   expect(alts.slice(4).map(a => a.split(/[:;,]/)[0])).toEqual(['Session', 'Claude (work)', 'Claude', 'Write the parser (work)', 'Build agent', '1 finished'])
   expect(alts[5]).toBe('Claude (work)')

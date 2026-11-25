@@ -1,7 +1,9 @@
-// Every picture the mod hands to the app that paints something has an alt of at least one
-// character after trimming: the desktop app drops an `Svg` whose alt is empty, so a row's mascot or
-// line with an empty alt is blank on screen. A picture "paints something" when its source is not
-// an svg element with nothing inside (the invisible spacers are left out by what they are).
+// Every picture the mod hands to the app has an alt of at least one character after trimming, as
+// the app's own rule says: the desktop app drops an `Svg` whose alt is empty, so a row's mascot or
+// line with an empty alt is blank on screen, and so is an invisible spacer (the icon gap and the
+// scroll gutter), which loses the room it holds. There is no exemption. A picture "paints
+// something" when its source is not an svg element with nothing inside; the counts of those guard
+// that a mount is not empty, and a picture that paints nothing is named `spacer` in a failure.
 
 import { expect, mock, test } from 'claude-code/testing'
 import type { Engine, Mounted } from 'claude-code/testing'
@@ -111,29 +113,30 @@ async function endAgent($: Engine, w: World, agentId: string): Promise<void> {
 // An svg element with nothing inside paints nothing.
 const paints = (src: string): boolean => !/^\s*<svg\b[^>]*>\s*<\/svg>\s*$/i.test(src) && !/^\s*<svg\b[^>]*\/>\s*$/i.test(src)
 
-type Offender = { key: string; len: number; head: string; kind: string }
+type Offender = { key: string; len: number; head: string; kind: string; size: string }
 
-// The painting pictures: how many there are, and those whose alt is empty after trimming.
+// Every picture: how many paint something, and those whose alt is empty after trimming.
 async function look(ui: Pick<Mounted, 'findAll'>): Promise<{ painting: number; offenders: Offender[] }> {
   const all = await ui.findAll({ type: 'Svg' })
   const painting = all.filter(s => paints(String(s.props.source)))
-  const bad = painting.filter(s => String(s.props.alt ?? '').trim().length < 1)
+  const bad = all.filter(s => String(s.props.alt ?? '').trim().length < 1)
   const offenders = bad.map(s => {
     const src = String(s.props.source)
     const key = (s as unknown as { key?: unknown }).key ?? s.props.key
-    const kind = /class="(?:ct|cw) /.test(src) ? 'mascot' : /height="1"/.test(src) ? 'line' : 'picture'
-    return { key: key === undefined ? '(no key)' : String(key), len: src.length, head: src.slice(0, 80), kind }
+    const kind = !paints(src) ? 'spacer' : /class="(?:ct|cw) /.test(src) ? 'mascot' : /\sheight="1"/.test(src) ? 'line' : 'picture'
+    return { key: key === undefined ? '(no key)' : String(key), len: src.length, head: src.slice(0, 80), kind, size: `${String(s.props.width)}x${String(s.props.height)}` }
   })
   return { painting: painting.length, offenders }
 }
 
-const describe = (os: Offender[]): string => os.map(o => `${o.kind} key=${o.key} len=${o.len} source=${JSON.stringify(o.head)}`).join('\n')
+const describe = (os: Offender[]): string => os.map(o => `${o.kind} ${o.size} key=${o.key} len=${o.len} source=${JSON.stringify(o.head)}`).join('\n')
 
 function expectNone(where: string, r: { painting: number; offenders: Offender[] }): void {
-  expect(r.offenders.length, `${where}: ${r.offenders.length} of ${r.painting} painting pictures have an empty alt:\n${describe(r.offenders)}`).toBe(0)
+  expect(r.offenders.length, `${where}: ${r.offenders.length} pictures have an empty alt (${r.painting} paint something):\n${describe(r.offenders)}`).toBe(0)
 }
 
 const pane = ($: Engine) => $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'Pane', requestId: 'crew-agents', props: PANE_PROPS as never })
+const sidePane = ($: Engine, id: string) => $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'Pane', requestId: id, props: PANE_PROPS as never })
 const band = ($: Engine) => $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'AbovePrompt', props: BAND_PROPS as never })
 
 async function settle(w: World, ms: number): Promise<void> {
@@ -165,7 +168,7 @@ for (const setup of SETUPS)
       await settle(w, 20_000)
     }
 
-    test(`alt: ${setup.who}, ${view.name}: the main agent alone, its turn ended: every painting picture has an alt`, opts, async ($, on) => {
+    test(`alt: ${setup.who}, ${view.name}: the main agent alone, its turn ended: every picture has an alt`, opts, async ($, on) => {
       const { w, p } = await start($, on)
       await endMain($, w)
       const r = await look(p)
@@ -173,7 +176,7 @@ for (const setup of SETUPS)
       expectNone('main alone', r)
     })
 
-    test(`alt: ${setup.who}, ${view.name}: plus a running subagent: every painting picture has an alt`, opts, async ($, on) => {
+    test(`alt: ${setup.who}, ${view.name}: plus a running subagent: every picture has an alt`, opts, async ($, on) => {
       const { w, p } = await start($, on)
       await endMain($, w)
       const before = await look(p)
@@ -185,7 +188,7 @@ for (const setup of SETUPS)
       expectNone('main + running subagent', r)
     })
 
-    test(`alt: ${setup.who}, ${view.name}: plus a finished subagent: every painting picture has an alt`, opts, async ($, on) => {
+    test(`alt: ${setup.who}, ${view.name}: plus a finished subagent: every picture has an alt`, opts, async ($, on) => {
       const { w, p } = await start($, on)
       await endMain($, w)
       const before = await look(p)
@@ -201,7 +204,7 @@ for (const setup of SETUPS)
       expectNone('main + finished subagent', r)
     })
 
-    test(`alt: ${setup.who}, ${view.name}: plus a planned row: every painting picture has an alt`, opts, async ($, on) => {
+    test(`alt: ${setup.who}, ${view.name}: plus a planned row: every picture has an alt`, opts, async ($, on) => {
       const { w, p } = await start($, on)
       await endMain($, w)
       const before = await look(p)
@@ -214,7 +217,7 @@ for (const setup of SETUPS)
     })
   }
 
-test('alt: the bar: every painting picture has an alt, the helper can pass', { options: OWNER_OPTIONS as never, timeoutMs: 60_000 }, async ($, on) => {
+test('alt: the bar: every picture has an alt, the helper can pass', { options: OWNER_OPTIONS as never, timeoutMs: 60_000 }, async ($, on) => {
   const w = await boot($, on, OWNER_STORED)
   const b = await band($)
   await $.prompt.submit({ text: 'Go on', wait: false, origin: { kind: 'composer' } } as never)
@@ -223,4 +226,33 @@ test('alt: the bar: every painting picture has an alt, the helper can pass', { o
   const r = await look(b)
   expect(r.painting, 'the bar draws painting pictures').toBeGreaterThan(0)
   expectNone('bar', r)
+})
+
+for (const [id, what] of [['crew-settings', 'settings'], ['crew-guide', 'guide']] as const)
+  test(`alt: the ${what} pane on the desktop: every picture has an alt`, { options: OWNER_OPTIONS as never, timeoutMs: 60_000 }, async ($, on) => {
+    const w = await boot($, on, OWNER_STORED)
+    const p = await sidePane($, id)
+    await settle(w, 20_000)
+    const r = await look(p)
+    expect((await p.findAll({ type: 'Svg' })).length, `the ${what} pane draws pictures`).toBeGreaterThan(0)
+    expectNone(`${what} pane`, r)
+  })
+
+// What a spacer carries. The agents pane with 24 agents at work is longer than a page, so the foot
+// (`rows-prev` / `rows-next`) is drawn with the first page's Previous control empty: an icon gap
+// (`iconGap` in hooks/register.tsx, from `pageFoot`), beside the scroll gutter (12 wide, 1 high).
+test('alt: every invisible spacer in the agents pane has the alt Spacer', { options: OWNER_OPTIONS as never, timeoutMs: 120_000 }, async ($, on) => {
+  const w = await boot($, on, OWNER_STORED)
+  const p = await pane($)
+  await $.prompt.submit({ text: 'Go on', wait: false, origin: { kind: 'composer' } } as never)
+  await $.turn.start({ text: 'Go on', turnId: 't1' } as never)
+  for (let i = 1; i <= 24; i += 1) await spawnCrew($, w, i, `shard ${i}`)
+  await settle(w, 20_000)
+  expect(await p.find({ key: 'rows-next' }), 'the 24 rows fill more than one page').toBeDefined()
+  expect(await p.find({ key: 'rows-prev-gap' }), 'the first page leaves Previous empty').toBeDefined()
+  const spacers = (await p.findAll({ type: 'Svg' })).filter(s => !paints(String(s.props.source)))
+  const isGutter = (s: (typeof spacers)[number]): boolean => Number(s.props.width) === 12 && Number(s.props.height) === 1
+  expect(spacers.filter(isGutter).length, 'one scroll gutter, 12 wide and 1 high').toBe(1)
+  expect(spacers.filter(s => !isGutter(s)).length, 'at least one icon gap').toBeGreaterThanOrEqual(1)
+  expect(spacers.map(s => `${String(s.props.width)}x${String(s.props.height)} alt=${JSON.stringify(s.props.alt)}`).filter(x => !x.endsWith('alt="Spacer"'))).toEqual([])
 })

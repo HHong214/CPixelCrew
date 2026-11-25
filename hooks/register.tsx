@@ -215,6 +215,8 @@ const BTN_ROW_H = 34
 const SCROLL_GUTTER = 12
 const ICON_GAP_SOURCE = `<svg xmlns="http://www.w3.org/2000/svg" width="${ICON}" height="${ICON}" viewBox="0 0 ${ICON} ${ICON}"></svg>`
 const GUTTER_SOURCE = `<svg xmlns="http://www.w3.org/2000/svg" width="${SCROLL_GUTTER}" height="1" viewBox="0 0 ${SCROLL_GUTTER} 1"></svg>`
+// What both invisible spacers carry: the desktop app drops an Svg whose alt is empty, and with it the room the spacer holds.
+const SPACER_ALT = 'Spacer'
 // Under this many columns the bar's limit pills say `3h 05m` instead of `resets in 3h 05m`.
 const NARROW_COLUMNS = 60
 // Rows whose log is open stay listed at most this many at once.
@@ -3208,7 +3210,7 @@ function iconGap(ui: Kit, key: string, opts: IconOpts = {}): RenderElement {
   if (ICON_MODE !== 'overlay' || !Svg) return <Box key={key} />
   return (
     <Box key={key} flexDirection="row" alignItems="flex-start" flexShrink={0} paddingX={opts.padX ?? ICON_PAD} marginY={opts.marginY ?? 0}>
-      <Svg source={ICON_GAP_SOURCE} alt="" width={ICON} height={ICON} />
+      <Svg source={ICON_GAP_SOURCE} alt={SPACER_ALT} width={ICON} height={ICON} />
     </Box>
   )
 }
@@ -3250,7 +3252,7 @@ function withGutter(ui: Kit, key: string, content: RenderElement | RenderElement
         {content}
       </Box>
       <Box key="scroll-gutter" flexShrink={0}>
-        <Svg source={GUTTER_SOURCE} alt="" width={SCROLL_GUTTER} height={1} />
+        <Svg source={GUTTER_SOURCE} alt={SPACER_ALT} width={SCROLL_GUTTER} height={1} />
       </Box>
     </Box>
   )
