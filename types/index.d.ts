@@ -240,6 +240,39 @@ export type Rates = {
   isLive: boolean
 }
 
+/**
+ * What a site draws from, composed from the values above at one time (2.5.0, slice A). The
+ * pane's holds the rows with only their open logs; the bar's holds no rows and no logs.
+ * `flow` is what the bar shows (the plan while it applies, else the run as a flow), `plan`
+ * that plan for its planned rows, `crew` the bar's `×N`, `creep` its fill for that second,
+ * `running` the active agents, `state` the task rows' state, `at` the bookkeeping's latest
+ * time. The settings are not in it: a render reads them as they are.
+ */
+export type FrameSnap = {
+  flow: Flow | null
+  plan: Flow | null
+  crew: number
+  creep: { start: number; target: number; delayMs: number } | null
+  list: AgentRun[]
+  retired: Retired
+  main: MainRun
+  usage: Usage
+  view: View
+  rates: Rates
+  at: number
+  running: number
+  state: 'none' | 'running' | 'paused' | 'done'
+}
+
+/**
+ * A frame: `snap`, the time its texts read (`clock`) and when it was composed (`madeAt`).
+ * The bar's `clock` is rounded down to the whole minute while nothing works (to the second in
+ * the cache's last five minutes, and once it expired), so every time it shows steps together;
+ * the pane's is `snap.at`. A frame is written only when `snap` or `clock` changed; a site that
+ * draws a frame composed more than a second ago asks for a fresh one.
+ */
+export type Frame = { snap: FrameSnap; clock: number; madeAt: number }
+
 // Inside the block below, `Settings` would name the engine's own type: alias ours first.
 export type CrewSettings = Settings
 
@@ -256,6 +289,10 @@ declare module 'claude-code' {
       settings: CrewSettings
       rates: Rates
       now: number
+      /** The agents pane's frame: all its render hooks read (with `view`). Null until the first. */
+      paneFrame: Shaped<Frame | null>
+      /** The bar's frame, as the pane's. */
+      barFrame: Shaped<Frame | null>
     }
   }
 }

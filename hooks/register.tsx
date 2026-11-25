@@ -14,6 +14,7 @@
 
 import { atom, read, update } from 'claude-code'
 import type {
+  Atom,
   Elements,
   EngineInterface,
   EventName,
@@ -29,7 +30,7 @@ import type {
   UiPressArgument,
 } from 'claude-code'
 
-import type { AgentRun, BarItem, Flow, Limit, LogEntry, LogKind, LogOutcome, MainRun, Rates, Retired, Run, Settings, Sizes, Usage, View } from '../types'
+import type { AgentRun, BarItem, Flow, Frame, FrameSnap, Limit, LogEntry, LogKind, LogOutcome, MainRun, Rates, Retired, Run, Settings, Sizes, Usage, View } from '../types'
 import {
   BAR_ITEMS,
   CURRENCIES,
@@ -61,6 +62,9 @@ import {
   clipTitle,
   closeLog,
   closedRun,
+  fitRows,
+  isStuck,
+  LIVE_LOG,
   drawnRows,
   contextGauge,
   costOf,
@@ -269,9 +273,6 @@ const SYNC_EVERY = 5
 const MAX_DESCRIPTION = 120
 const MAX_NOTE = 80
 
-// The streamed main loop writes state at most this often, so a fast stream
-// does not redraw the panel per token.
-const THROTTLE_MS = 250
 const MAX_THINKING = 2_000
 const MAX_INPUT = 4_000
 
@@ -334,6 +335,11 @@ const usageState = atom({ plugin: 'CPixelCrew', key: 'usage' } as const, blankUs
 const viewState = atom({ plugin: 'CPixelCrew', key: 'view' } as const, blankView())
 const ratesState = atom({ plugin: 'CPixelCrew', key: 'rates' } as const, { at: 0, rates: { ...FALLBACK_RATES }, isLive: false })
 const nowState = atom({ plugin: 'CPixelCrew', key: 'now' } as const, 0)
+// What the pane and the bar draw from (2.5.0): composed from the values above, written at
+// most once a second and only when changed. The render hooks read these and `view` alone.
+const FRAME_SHAPE = 'frame-2.5a'
+const paneFrameState = atom({ plugin: 'CPixelCrew', key: 'paneFrame' } as const, null, { shape: FRAME_SHAPE })
+const barFrameState = atom({ plugin: 'CPixelCrew', key: 'barFrame' } as const, null, { shape: FRAME_SHAPE })
 
 // The options `register` was handed. A changed option loads the module again and runs
 // `register` with the new values, so a module variable always holds the current ones.
@@ -399,27 +405,12 @@ type IconOpts = { active?: boolean; marginY?: Space; padX?: Space }
 // its planned rows. `running` is the real count of active agents (running or waiting) and
 // `state` the task rows' state, both reckoned once per drawing; nothing drawn reads
 // `flow.running`. `crew` is the bar's `×N`; `creep` its fill for this second, short of done.
-type Snap = {
-  flow: Flow | null
-  plan: Flow | null
-  run: Run | null
-  crew: number
-  creep: Creep | null
-  list: AgentRun[]
-  /** What the rows no longer listed had spent: in the session's totals. */
-  retired: Retired
-  main: MainRun
-  usage: Usage
-  view: View
-  settings: Settings
-  rates: Rates
-  at: number
-  running: number
-  state: TaskState
-}
+// A frame's snap with the settings as they are now: what a drawing reads. `retired` is what
+// the rows no longer listed had spent, in the session's totals.
+type Snap = FrameSnap & { settings: Settings; creep: Creep | null; state: TaskState }
 
 // What the main loop's stream has shown so far; one per model request.
-type Follow = { phase: string; phaseAt: number; thinking: string; tool: string; input: string; shown: string; pending: string; wroteAt: number; startedAt: number | null }
+type Follow = { phase: string; phaseAt: number; thinking: string; tool: string; input: string; shown: string; startedAt: number | null }
 
 // ---------------------------------------------------------------------------
 // Small pure helpers.
@@ -447,6 +438,34 @@ const waitingFor = (n: number): string => `Waiting for ${plural(n, 'agent')}`
 const tzOf = (at: number): number => -new Date(at).getTimezoneOffset()
 // State a v1 module wrote may hold runs without a log.
 const logOf = (x: { log?: unknown }): LogEntry[] => (Array.isArray(x.log) ? (x.log as LogEntry[]) : [])
+// A live row's log, and the main agent's, keep their newest LIVE_LOG entries (A1).
+const logPush = (log: LogEntry[], entry: LogEntry): LogEntry[] => pushLog(log, entry, LIVE_LOG)
+// A finished row keeps the newest Log lines entries, the size in force (5 to 200).
+const finishedLines = (): number => Math.min(LIVE_LOG, Math.max(1, Math.round(fin(settingsNow().logLines) ?? LIVE_LOG)))
+
+// The stored rows as the mod can work on them: entries that are not records dropped, and a row
+// without an id, a description, a usage tally or a log given safe ones (A10). The same array
+// when nothing needed it, so a writer that changes nothing still writes nothing.
+function cleanRows(raw: unknown): AgentRun[] {
+  if (!Array.isArray(raw)) return []
+  const isClean = (a: unknown): boolean =>
+    isRecord(a) && typeof a.id === 'string' && typeof a.description === 'string' && isRecord(a.use) && Array.isArray(a.log) && typeof a.startedAt === 'number'
+  if (raw.every(isClean)) return raw as AgentRun[]
+  return raw.filter(isRecord).map((a, i) => {
+    const id = typeof a.id === 'string' && a.id ? a.id : typeof a.id === 'number' ? String(a.id) : `row-${i}`
+    return {
+      ...a,
+      id,
+      description: typeof a.description === 'string' ? a.description : '',
+      use: isRecord(a.use) ? a.use : emptyUse(),
+      log: Array.isArray(a.log) ? a.log : [],
+      startedAt: fin(a.startedAt) ?? 0,
+      doingSince: fin(a.doingSince) ?? fin(a.startedAt) ?? 0,
+      doing: typeof a.doing === 'string' ? a.doing : '',
+      model: typeof a.model === 'string' ? a.model : '',
+    } as unknown as AgentRun
+  })
+}
 
 // The task rows' words where no drawing is (the terminal), as the drawings say them:
 // `No task yet`, `Tasks 1/3`, `Paused · 1/3` (`Paused 1/3` with `sep` ' '), `Done`. A
@@ -495,7 +514,8 @@ function finishRun(a: AgentRun, at: number, status: 'done' | 'failed', text: str
     endedAt: at,
     doing: status === 'done' ? 'Finished' : 'Failed',
     doingSince: at,
-    log: pushLog(closeAll(logOf(a), at, outcome), logEntry(at, 'end', text, outcome, ms)),
+    // A finished row keeps the newest Log lines entries, its end among them (A1).
+    log: logPush(closeAll(logOf(a), at, outcome), logEntry(at, 'end', text, outcome, ms)).slice(-finishedLines()),
   }
 }
 
@@ -561,12 +581,12 @@ function closedByReport(f: Flow, isClosed: boolean): Flow {
 
 // Rows leaving the list: their tokens and cost go to the retired tally, once.
 async function retireRows($: EngineInterface, rows: AgentRun[]): Promise<void> {
-  if (rows.length) await update($, retiredState, r => retire(normalizeRetired(r), rows))
+  if (rows.length) await put($, retiredState, r => retire(normalizeRetired(r), rows))
 }
 
 // The fill's mark taken afresh: a plan that reopens starts from its honest fill.
 async function resetMark($: EngineInterface): Promise<void> {
-  await update($, runState, r => (r ? { ...r, high: 0, highKey: undefined } : r))
+  await put($, runState, r => (r ? { ...r, high: 0, highKey: undefined } : r))
 }
 
 function stepRun(a: AgentRun, e: In<'turn.step'>, usage: TurnUsage | null): AgentRun {
@@ -593,21 +613,210 @@ function stepRun(a: AgentRun, e: In<'turn.step'>, usage: TurnUsage | null): Agen
 // ---------------------------------------------------------------------------
 // Small `$` helpers.
 
+// Reads, applies `fn` and writes, as `update` does, but writes nothing when `fn` hands back
+// the value it was given, the same object (A8). A write marks the frames out of date.
+async function put<T>($: EngineInterface, a: Atom<T>, fn: (v: T) => T): Promise<T> {
+  let same: { value: T } | null = null
+  try {
+    const out = (await updateOf($, a, v => {
+      const next = fn(v)
+      if (next === v) {
+        same = { value: v }
+        throw new Error('unchanged')
+      }
+      same = null
+      return next
+    })) as T
+    writeGens.set(a.ref.key, (writeGens.get(a.ref.key) ?? 0) + 1)
+    framesStale($)
+    return out
+  } catch (err) {
+    const kept = same as { value: T } | null
+    if (kept) return kept.value
+    throw err
+  }
+}
+
+// `update` on one of the mod's values, named as a const atom of this file (the engine's scan
+// reads each update's source).
+function updateOf<T>($: EngineInterface, a: Atom<T>, fn: (v: T) => T): Promise<unknown> {
+  const f = fn as never
+  if (a === (flowState as unknown)) return update($, flowState, f)
+  if (a === (runState as unknown)) return update($, runState, f)
+  if (a === (agentsState as unknown)) return update($, agentsState, f)
+  if (a === (retiredState as unknown)) return update($, retiredState, f)
+  if (a === (mainState as unknown)) return update($, mainState, f)
+  if (a === (usageState as unknown)) return update($, usageState, f)
+  if (a === (viewState as unknown)) return update($, viewState, f)
+  if (a === (ratesState as unknown)) return update($, ratesState, f)
+  if (a === (nowState as unknown)) return update($, nowState, f)
+  return Promise.reject(new Error('not a value of the mod'))
+}
+
+// Every write of the agent list goes through here: the list as the mod can work on it
+// (`cleanRows`), the change, then the fit under AGENTS_LIMIT (`fitRows`, A2); the rows the fit
+// lets go are retired, so the session's totals stay.
+async function putAgents($: EngineInterface, change: (list: AgentRun[]) => AgentRun[]): Promise<AgentRun[]> {
+  // The plan in force, from the read cache while it was not written since.
+  const flow = await cachedRead('flow', () => read($, flowState), null)
+  let removed: AgentRun[] = []
+  const out = await put($, agentsState, raw => {
+    removed = []
+    const list = cleanRows(raw)
+    const next = change(list)
+    if (next === list) return list === raw ? raw : next
+    const fit = fitRows(next, isRecord(flow) ? (flow as unknown as Flow) : null)
+    removed = fit.removed
+    return fit.kept
+  })
+  await retireRows($, removed)
+  return out
+}
+
 async function updateRun($: EngineInterface, agentId: string, change: (a: AgentRun) => AgentRun): Promise<boolean> {
   let isFound = false
-  await update($, agentsState, list =>
-    list.map(a => {
+  await putAgents($, list => {
+    isFound = false
+    let isChanged = false
+    const next = list.map(a => {
       if (a.agentId !== agentId) return a
       isFound = true
-      return change(a)
-    }),
-  )
+      const changed = change(a)
+      if (changed !== a) isChanged = true
+      return changed
+    })
+    return isChanged ? next : list
+  })
   return isFound
+}
+
+// ---------------------------------------------------------------------------
+// Frames (A4, A5): the pane and the bar draw from `paneFrame` and `barFrame`. A write of any
+// other value marks them out of date; they are then composed (from one read of the values)
+// at once when no frame was written in the last FRAME_MS, else FRAME_MS after the last write,
+// and each is written only when it differs from the one it last wrote. A press writes at once
+// (`framesNow`). The two frames share this one hold; while anything works the tick composes
+// them itself, so a busy second costs no timer.
+
+const FRAME_MS = 1_000
+const frames = {
+  /** Out of date since they were last composed. */
+  isStale: false,
+  /** A composition is asked for, by a `clock.after`. */
+  isQueued: false,
+  /** No write before this time: FRAME_MS after the last. */
+  heldUntil: -Infinity,
+  /** Compositions run one after the other, so an older one never lands last. */
+  chain: Promise.resolve(false) as Promise<boolean>,
+  /** What this load last wrote of each (`snap` and `clock`, as JSON), and the bar's clock. */
+  pane: '',
+  bar: '',
+  barClock: -1,
+}
+
+// The frames out of date: composed at once, or as the hold ends.
+function framesStale($: EngineInterface): void {
+  frames.isStale = true
+  queueFrames($, 0)
+}
+
+// A timer, not this dispatch: the frames are composed once the event that changed the values
+// is done with them, and never while a render hook draws (no write is allowed then).
+function queueFrames($: EngineInterface, ms: number): void {
+  if (frames.isQueued) return
+  frames.isQueued = true
+  try {
+    $.clock.after(Math.max(0, ms), () => {
+      frames.isQueued = false
+      void flushFrames($)
+    })
+  } catch {
+    frames.isQueued = false
+  }
+}
+
+// Composes and writes the frames when out of date and not held; `at`, the clock when known.
+async function flushFrames($: EngineInterface, at?: number): Promise<void> {
+  if (!frames.isStale) return
+  const now = at ?? (await $.clock.now().catch(() => Infinity))
+  if (now < frames.heldUntil) return queueFrames($, frames.heldUntil - now)
+  await writeFrames($)
+  if (frames.isStale) queueFrames($, frames.heldUntil - now)
+}
+
+// A press: the frames composed and written at once, when changed; a write holds them anew.
+async function framesNow($: EngineInterface): Promise<void> {
+  await writeFrames($)
+}
+
+// Composes both frames from one read and writes each that differs from the last; true when
+// either was written, which holds them for FRAME_MS. `madeAt`, when it was composed, is left
+// out of the comparison.
+function writeFrames($: EngineInterface): Promise<boolean> {
+  const run = async (): Promise<boolean> => {
+    frames.isStale = false
+    const c = await composeSnap($)
+    const pane = paneFrameOf(c.snap, c.clock)
+    const bar = barFrameOf(c.snap, c.clock, c.isBusy)
+    const paneJson = JSON.stringify([pane.snap, pane.clock])
+    const barJson = JSON.stringify([bar.snap, bar.clock])
+    let isWritten = false
+    if (paneJson !== frames.pane) {
+      await $.state.set({ plugin: 'CPixelCrew', key: 'paneFrame' }, { shape: FRAME_SHAPE, value: pane })
+      frames.pane = paneJson
+      isWritten = true
+    }
+    if (barJson !== frames.bar) {
+      await $.state.set({ plugin: 'CPixelCrew', key: 'barFrame' }, { shape: FRAME_SHAPE, value: bar })
+      frames.bar = barJson
+      frames.barClock = bar.clock
+      isWritten = true
+    }
+    if (isWritten) frames.heldUntil = c.clock + FRAME_MS
+    return isWritten
+  }
+  const out = frames.chain.then(run, run).catch(() => false)
+  frames.chain = out
+  return out
+}
+
+// The pane's frame: the rows with only their open logs, the main agent's log only when open.
+// Its clock is the bookkeeping's (`at`): a render times its entrances on the clock as it draws.
+function paneFrameOf(s: FrameSnap, clock: number): Frame {
+  const open = new Set(s.view.openLogs)
+  const list = s.list.map(a => (open.has(a.id) || !a.log.length ? a : { ...a, log: [] }))
+  const main = open.has('main') || !s.main.log.length ? s.main : { ...s.main, log: [] }
+  return { snap: { ...s, list, main }, clock: s.at, madeAt: clock }
+}
+
+// While nothing works, the bar's time steps once a minute; in the cache's last five minutes,
+// and once it has expired, once a second (A7).
+const CACHE_SECONDS_MS = 300_000
+function barClockOf(clock: number, cacheExpiresAt: number | null): number {
+  const second = Math.floor(clock / 1000) * 1000
+  if (typeof cacheExpiresAt === 'number' && cacheExpiresAt - second <= CACHE_SECONDS_MS) return second
+  return Math.floor(clock / 60_000) * 60_000
+}
+
+// The bar's frame: no rows, no logs, no plan rows; its time exact while anything works.
+function barFrameOf(s: FrameSnap, clock: number, isBusy: boolean): Frame {
+  return {
+    snap: { ...s, list: [], plan: null, retired: blankRetired(), main: s.main.log.length ? { ...s.main, log: [] } : s.main },
+    clock: isBusy ? clock : barClockOf(clock, s.usage.cacheExpiresAt),
+    madeAt: clock,
+  }
+}
+
+// The cache countdown in whole minutes until five are left, then `m:ss` (A7).
+function countdownText(leftMs: number): string {
+  if (leftMs > CACHE_SECONDS_MS) return `${Math.floor(leftMs / 60_000)}m`
+  const sec = Math.ceil(leftMs / 1000)
+  return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`
 }
 
 async function stamp($: EngineInterface): Promise<number> {
   const at = await $.clock.now()
-  await update($, nowState, () => at)
+  await put($, nowState, () => at)
   return at
 }
 
@@ -618,7 +827,7 @@ async function refreshUsage($: EngineInterface): Promise<void> {
   const list = await read($, agentsState)
   const retired = normalizeRetired(await read($, retiredState).catch(() => null))
   const started = fin(u.startedAt)
-  const next = await update($, usageState, prev => withTurnCost({ ...measured(prev, u, at), sessionStartedAt: started ?? prev.sessionStartedAt }, m, list, at, retired))
+  const next = await put($, usageState, prev => withTurnCost({ ...measured(prev, u, at), sessionStartedAt: started ?? prev.sessionStartedAt }, m, list, at, retired))
   await keepLimits($, next)
 }
 
@@ -648,7 +857,7 @@ async function adoptLimits($: EngineInterface): Promise<void> {
     const stored = await $.store.get(LIMITS_KEY)
     const at = await $.clock.now()
     const limits = freshLimits(stored, at)
-    if (limits.length) await update($, usageState, u => (u.limits.length ? u : { ...u, limits }))
+    if (limits.length) await put($, usageState, u => (u.limits.length ? u : { ...u, limits }))
   } catch {
     // The panel shows the context alone until the engine reports limits.
   }
@@ -656,8 +865,8 @@ async function adoptLimits($: EngineInterface): Promise<void> {
 
 // The main agent's state between turns follows its subagents.
 async function settleMain($: EngineInterface): Promise<void> {
-  const n = (await read($, agentsState)).filter(isActive).length
-  await update($, mainState, (m): MainRun => {
+  const n = cleanRows(await read($, agentsState)).filter(isActive).length
+  await put($, mainState, (m): MainRun => {
     if (m.turnStartedAt !== null) return m
     if (n > 0) return m.status === 'waiting' && m.doing === waitingFor(n) ? m : { ...m, status: 'waiting', doing: waitingFor(n) }
     return m.status === 'resting' ? m : { ...m, status: 'resting', doing: 'Resting' }
@@ -677,7 +886,7 @@ async function settleFlow($: EngineInterface): Promise<void> {
     // Finishing by itself counts as a report: the plan stays shown for the run it finished in (`planApplies`).
     const at = await $.clock.now()
     // Written only over the flow it was reckoned from: a report that came in between wins.
-    await update($, flowState, prev => (prev && !prev.isFinished && JSON.stringify(prev) === JSON.stringify(flow) ? { ...settled, reportedAt: at } : prev))
+    await put($, flowState, prev => (prev && !prev.isFinished && JSON.stringify(prev) === JSON.stringify(flow) ? { ...settled, reportedAt: at } : prev))
   } catch {
     // The orchestrator's own report finishes it.
   }
@@ -687,20 +896,20 @@ async function settleFlow($: EngineInterface): Promise<void> {
 // change that may lower the honest fill (a re-plan, the next tick's write) and after
 // one that moves it on, so the bar never moves back while the run's agent count stays.
 // A view or count other than the one the mark was taken against starts it afresh. Never throws.
-async function holdFill($: EngineInterface, at?: number): Promise<void> {
+async function holdFill($: EngineInterface, at?: number, given?: AgentRun[]): Promise<void> {
   try {
     const now = at ?? (await $.clock.now())
     const run = await read($, runState)
     if (!run) return
-    const list = await read($, agentsState)
-    const rows = Array.isArray(list) ? list : []
+    // The list the caller just read, else read here.
+    const rows = given ?? cleanRows(await read($, agentsState))
     const view = barView(await read($, flowState), run, rows, now)
     if (!view.flow) return
     const fill = viewFill(view, run, rows, now)
     // In the run view a stuck agent counts as over; one that works again starts the mark afresh.
     const quiet = view.isPlan ? undefined : runQuiet(run, rows, now)
     // Written only over the run it was reckoned from: a run that started in between keeps its own mark.
-    await update($, runState, prev => (prev && prev.startedAt === run.startedAt ? heldRun(prev, view.key, fill, quiet) : prev))
+    await put($, runState, prev => (prev && prev.startedAt === run.startedAt ? heldRun(prev, view.key, fill, quiet) : prev))
   } catch {
     // The bar may step back once; the next hold catches up.
   }
@@ -1134,7 +1343,7 @@ async function loadAppLimits($: EngineInterface): Promise<void> {
 
 async function toggleBar($: EngineInterface): Promise<boolean> {
   const at = await $.clock.now()
-  const v = await update($, viewState, prev => {
+  const v = await put($, viewState, prev => {
     const p = normalizeView(prev)
     return { ...p, isBarCollapsed: !p.isBarCollapsed, barToggledAt: at }
   })
@@ -1147,7 +1356,7 @@ async function toggleBar($: EngineInterface): Promise<boolean> {
 }
 
 async function toggleView($: EngineInterface, key: 'isCompact' | 'isDoneCollapsed'): Promise<void> {
-  const v = await update($, viewState, prev => {
+  const v = await put($, viewState, prev => {
     const p = normalizeView(prev)
     return { ...p, [key]: !p[key] }
   })
@@ -1193,7 +1402,7 @@ async function openClear($: EngineInterface, pane: { id: string; title: string }
 // remembered for this session (PANE_OPEN_KEY).
 async function openPane($: EngineInterface, isKept = false): Promise<void> {
   const at = await stamp($)
-  if (!(await isOpenPane($, PANE))) await update($, viewState, v => ({ ...normalizeView(v), paneOpenedAt: at }))
+  if (!(await isOpenPane($, PANE))) await put($, viewState, v => ({ ...normalizeView(v), paneOpenedAt: at }))
   if (await openClear($, { id: PANE, title: PANE_TITLE }, isKept)) await rememberPaneOpen($)
   $.ui.invalidate('ui.render')
 }
@@ -1247,7 +1456,7 @@ async function toggleGuide($: EngineInterface): Promise<boolean> {
 // takes its log in, so the row may change page: it becomes the view's anchor, and the
 // page shown is the one that holds it (`anchoredPage`). The main row is on every page.
 async function toggleLog($: EngineInterface, id: string): Promise<void> {
-  await update($, viewState, prev => {
+  await put($, viewState, prev => {
     const v = normalizeView(prev)
     const openLogs = v.openLogs.includes(id) ? v.openLogs.filter(x => x !== id) : [...v.openLogs, id].slice(-MAX_OPEN_LOGS)
     return id === 'main' ? { ...v, openLogs } : { ...v, openLogs, rowPage: { n: v.rowPage?.n ?? 0, first: id } }
@@ -1257,7 +1466,7 @@ async function toggleLog($: EngineInterface, id: string): Promise<void> {
 // The agents panel's page of rows, kept in the view beside its other state: the page and
 // the id of the row it starts at, which the page follows. The first page is kept as no entry.
 async function setRowPage($: EngineInterface, n: number, first: string): Promise<void> {
-  await update($, viewState, prev => {
+  await put($, viewState, prev => {
     const v = normalizeView(prev)
     if (n >= 1 && first) v.rowPage = { n: Math.floor(n), first }
     else delete v.rowPage
@@ -1272,11 +1481,13 @@ async function autoOpen($: EngineInterface, key: string, isOfPlan: boolean): Pro
   if (s.autoOpen === 'never' || (!isOfPlan && s.autoOpen !== 'any')) return
   // Every key the panel has opened for is remembered, so closing it
   // stays the person's decision when planned and other subagents alternate.
+  // Kept escaped (`%` and `|`), so a title that holds `|` is one entry (A9).
+  const kept = key.replace(/%/g, '%25').replace(/\|/g, '%7C')
   const opened = normalizeView(await read($, viewState)).autoOpenedFor.split('|')
-  if (opened.includes(key)) return
-  await update($, viewState, prev => {
+  if (opened.includes(kept)) return
+  await put($, viewState, prev => {
     const v = normalizeView(prev)
-    return { ...v, autoOpenedFor: [...v.autoOpenedFor.split('|').filter(Boolean), key].slice(-20).join('|') }
+    return { ...v, autoOpenedFor: [...v.autoOpenedFor.split('|').filter(Boolean), kept].slice(-20).join('|') }
   })
   await openPane($).catch(() => undefined)
 }
@@ -1284,18 +1495,18 @@ async function autoOpen($: EngineInterface, key: string, isOfPlan: boolean): Pro
 async function restore($: EngineInterface): Promise<void> {
   const stored = async (key: string): Promise<unknown> => $.store.get(key).catch(() => undefined)
   const r = ratesOf(await stored('rates'))
-  await update($, ratesState, () => r)
+  await put($, ratesState, () => r)
   const bar = await stored('bar')
   const compact = await stored(COMPACT_KEY)
-  await update($, viewState, v => ({ ...normalizeView(v), isBarCollapsed: isRecord(bar) && bar.isCollapsed === true, isCompact: isRecord(compact) && compact.isCompact === true }))
+  await put($, viewState, v => ({ ...normalizeView(v), isBarCollapsed: isRecord(bar) && bar.isCollapsed === true, isCompact: isRecord(compact) && compact.isCompact === true }))
 }
 
 async function seed($: EngineInterface): Promise<void> {
   const at = await stamp($)
-  await update($, usageState, u => ({ ...u, at, sessionStartedAt: u.sessionStartedAt || at }))
-  await update($, mainState, m => (m.turns === 0 ? { ...m, doingSince: at } : m))
+  await put($, usageState, u => ({ ...u, at, sessionStartedAt: u.sessionStartedAt || at }))
+  await put($, mainState, m => (m.turns === 0 ? { ...m, doingSince: at } : m))
   const model = await $.session.model().catch(() => '')
-  if (model) await update($, mainState, m => ({ ...m, model, contextMax: windowOf(model) }))
+  if (model) await put($, mainState, m => ({ ...m, model, contextMax: windowOf(model) }))
   await refreshUsage($).catch(() => undefined)
 }
 
@@ -1314,7 +1525,7 @@ async function refreshRates($: EngineInterface): Promise<void> {
     const json: unknown = JSON.parse(res.text)
     if (!isRecord(json) || json.result !== 'success' || !isRecord(json.rates)) return
     const next: Rates = { ...ratesOf({ rates: json.rates }), at, isLive: true }
-    await update($, ratesState, () => next)
+    await put($, ratesState, () => next)
     await $.store.set('rates', next).catch(() => undefined)
     // The plugin screen shows the rate in use; a load that is resetting syncs at the reset's end.
     if (!resettingNow && !(await readResetting($))) await syncMirrors($)
@@ -1330,21 +1541,26 @@ async function tick($: EngineInterface): Promise<void> {
   try {
     live.ticks += 1
     await loadSizes($)
-    // The app's usage windows, at most every 5 minutes; not awaited, the clocks go on.
-    if (appFails < APP_MAX_FAILS && !appBusy && (await $.clock.now()) - appAt >= APP_EVERY_MS) void refreshAppUsage($)
-    const m = await read($, mainState)
-    const list = await read($, agentsState)
-    const isBusy = m.turnStartedAt !== null || list.some(isActive)
     const at = await $.clock.now()
+    // The app's usage windows, at most every 5 minutes; not awaited, the clocks go on.
+    if (appFails < APP_MAX_FAILS && !appBusy && at - appAt >= APP_EVERY_MS) void refreshAppUsage($)
+    const m = await read($, mainState)
+    const list = cleanRows(await read($, agentsState))
+    const isBusy = (isRecord(m) && typeof m.turnStartedAt === 'number') || list.some(isActive)
     if (isBusy) {
-      await holdFill($, at)
-      await update($, nowState, () => at)
+      // The clocks of whatever runs: the frames are composed again, with this second's time.
+      await holdFill($, at, list)
+      await streamDue($, at).catch(() => undefined)
+      frames.isStale = true
+      await flushFrames($, at)
     } else {
-      // Idle rows are not redrawn on a timer (it restarts their animations); only
-      // the bar's cache countdown needs the second hand, and it reads the clock itself.
+      // Idle (A7): the tick writes nothing and invalidates nothing. Only the bar's cache
+      // countdown moves: its frame is composed again when the bar's time steps, once a
+      // minute, once a second in the last five; the pane's frame stands.
       const u = await read($, usageState)
       const s = settingsNow()
-      if (s.barItems.includes('cache') && u.cacheExpiresAt !== null && at < u.cacheExpiresAt + TICK_MS) $.ui.invalidate('ui.render')
+      const expires = isRecord(u) && typeof u.cacheExpiresAt === 'number' ? u.cacheExpiresAt : null
+      if (s.barItems.includes('cache') && expires !== null && at < expires + TICK_MS && barClockOf(at, expires) !== frames.barClock) framesStale($)
     }
     if (list.some(isActive) && live.ticks % SYNC_EVERY === 0) await syncAgents($)
   } catch {
@@ -1357,19 +1573,34 @@ async function syncAgents($: EngineInterface): Promise<void> {
   const status = new Map(listed.map(info => [info.id, info.status]))
   const at = await $.clock.now()
   let hasEnded = false
-  await update($, agentsState, list =>
-    list.map(a => {
+  await putAgents($, list => {
+    hasEnded = false
+    let isChanged = false
+    const next = list.map(a => {
+      if (!isActive(a)) return a
       const s = a.agentId === undefined ? undefined : status.get(a.agentId)
-      if (!isActive(a) || s === undefined) return a
+      if (s === undefined) {
+        // A3: quiet for STUCK_MS and not listed (or never given an id): its end was missed.
+        // It comes back to `running` at its next step.
+        if (!isStuck(a, at)) return a
+        hasEnded = true
+        isChanged = true
+        return finishRun(a, at, 'failed', 'Stopped: no longer listed')
+      }
       if (s === 'completed' || s === 'failed' || s === 'killed') {
         hasEnded = true
+        isChanged = true
         const ms = at - a.startedAt
         return s === 'completed' ? finishRun(a, at, 'done', `Finished in ${fmtTime(ms)}`) : finishRun(a, at, 'failed', `Stopped (${s}) after ${fmtTime(ms)}`)
       }
-      if ((s === 'waiting' || s === 'idle' || s === 'pending') && a.status === 'running') return { ...a, status: 'waiting', doingSince: at }
+      if ((s === 'waiting' || s === 'idle' || s === 'pending') && a.status === 'running') {
+        isChanged = true
+        return { ...a, status: 'waiting' as const, doingSince: at }
+      }
       return a
-    }),
-  )
+    })
+    return isChanged ? next : list
+  })
   if (hasEnded) {
     await settleMain($)
     await settleFlow($)
@@ -1560,21 +1791,21 @@ async function onProgress($: EngineInterface, e: In<'tool.call'>) {
     if (prev?.isFinished && isSameFlow && !hasTasks) {
       const reopened = reopenedFlow(prev, input)
       if (reopened) {
-        await update($, flowState, () => ({ ...reopened, reportedAt: at }))
+        await put($, flowState, () => ({ ...reopened, reportedAt: at }))
         await resetMark($)
         await holdFill($, at)
         return { result: `ok: ${flowLabel(reopened)}` }
       }
       // A plan the orchestrator closes (`finished: true`) is closed for good: without the
       // settled marker, neither a later report nor a run of one of its tasks reopens it.
-      await update($, flowState, p => (p ? closedByReport({ ...p, reportedAt: at }, input.finished === true) : p))
+      await put($, flowState, p => (p ? closedByReport({ ...p, reportedAt: at }, input.finished === true) : p))
       return { result: `ok: ${flowLabel(prev)}` }
     }
     // A re-plan of a plan that settled by itself reopens it and takes the new tasks; its
     // finished rows stay.
     if (prev?.isFinished && prev.settled && isSameFlow && hasTasks) {
       const reopened = reopenedFlow(prev, null) ?? prev
-      const f = await update($, flowState, () => {
+      const f = await put($, flowState, () => {
         const m = mergeFlow(reopened, input)
         return { ...m, reportedAt: at, startedAt: m.startedAt ?? at }
       })
@@ -1589,14 +1820,14 @@ async function onProgress($: EngineInterface, e: In<'tool.call'>) {
     // spent stays in the session's totals.
     if (isNew) {
       let gone: AgentRun[] = []
-      await update($, agentsState, list => {
+      await putAgents($, list => {
         gone = list.filter(a => !isActive(a))
-        return list.filter(isActive)
+        return gone.length ? list.filter(isActive) : list
       })
       await retireRows($, gone)
     }
     // A report makes the flow fresh; a new flow is named by when it was first reported.
-    const f = await update($, flowState, p => {
+    const f = await put($, flowState, p => {
       const m = mergeFlow(p, input)
       return { ...m, reportedAt: at, startedAt: m.startedAt ?? at }
     })
@@ -1622,7 +1853,7 @@ async function onStep($: EngineInterface, e: In<'tool.call'>) {
     const done = total ? Math.min(total, counted) : counted
     const note = typeof input.note === 'string' ? clip(printable(input.note), MAX_NOTE) : ''
     const text = `${total ? `${done}/${total}` : done}${note ? ` · ${note}` : ''}`
-    return { ...a, stepTotal: total, stepDone: done, stepNote: note || undefined, stepAt: at, log: pushLog(logOf(a), logEntry(at, 'step', text)) }
+    return { ...a, stepTotal: total, stepDone: done, stepNote: note || undefined, stepAt: at, log: logPush(logOf(a), logEntry(at, 'step', text)) }
   })
   await holdFill($, at)
   return { result: isFound ? 'ok' : `ignored: no panel row for agent ${agentId}` }
@@ -1640,7 +1871,7 @@ async function onAgentTool($: EngineInterface, e: Parameters<AgentToolHook>[1], 
     const description = clip(printable(String((e as { description?: unknown }).description ?? '')), MAX_DESCRIPTION)
     const plan = await read($, flowState)
     if (plan && !plan.isFinished && (isLegacyCrewType(type) || isPlanned(plan, description))) {
-      await update($, flowState, prev => {
+      await put($, flowState, prev => {
         if (!prev || prev.isFinished) return prev
         return { ...prev, running: prev.running + 1, phase: prev.phase === 'plan' ? 'delegate' : prev.phase }
       })
@@ -1652,7 +1883,7 @@ async function onAgentTool($: EngineInterface, e: Parameters<AgentToolHook>[1], 
   try {
     return await next(e)
   } finally {
-    if (isCounted) await update($, flowState, prev => (prev ? { ...prev, running: Math.max(0, prev.running - 1) } : prev)).catch(() => undefined)
+    if (isCounted) await put($, flowState, prev => (prev ? { ...prev, running: Math.max(0, prev.running - 1) } : prev)).catch(() => undefined)
   }
 }
 
@@ -1661,16 +1892,17 @@ async function startTool($: EngineInterface, agentId: string | undefined, label:
   const open: LogEntry = { ...logEntry(at, 'tool', label, 'open'), callId }
   if (agentId === undefined) {
     live.turnActions += 1
-    await update($, mainState, m => ({ ...m, status: m.turnStartedAt !== null ? 'working' : m.status, doing: label, doingSince: at, log: pushLog(logOf(m), open) }))
+    const held = takeStream()
+    await put($, mainState, m => ({ ...m, status: m.turnStartedAt !== null ? 'working' : m.status, doing: label, doingSince: at, log: logPush(withRows(logOf(m), held), open) }))
   } else {
-    await updateRun($, agentId, a => ({ ...a, status: a.status === 'waiting' ? 'running' : a.status, doing: label, doingSince: at, log: pushLog(logOf(a), open) }))
+    await updateRun($, agentId, a => ({ ...a, status: a.status === 'waiting' ? 'running' : a.status, doing: label, doingSince: at, log: logPush(logOf(a), open) }))
   }
 }
 
 async function endTool($: EngineInterface, agentId: string | undefined, outcome: LogOutcome, callId: string): Promise<void> {
   const at = await $.clock.now()
   if (agentId === undefined) {
-    await update($, mainState, m => ({
+    await put($, mainState, m => ({
       ...m,
       status: m.status === 'waiting' && m.turnStartedAt !== null ? 'working' : m.status,
       doing: unwait(m.doing),
@@ -1712,8 +1944,11 @@ async function onPermissionRequest($: EngineInterface, e: In<'classic.Permission
     const doing = `${APPROVAL}${label}`
     const at = await $.clock.now()
     const waitRow = logEntry(at, 'wait', doing)
-    if (e.agent_id !== undefined) await updateRun($, e.agent_id, a => ({ ...a, status: 'waiting', doing, doingSince: at, log: pushLog(logOf(a), waitRow) }))
-    else await update($, mainState, (m): MainRun => ({ ...m, status: 'waiting', doing, doingSince: at, log: pushLog(logOf(m), waitRow) }))
+    if (e.agent_id !== undefined) await updateRun($, e.agent_id, a => ({ ...a, status: 'waiting', doing, doingSince: at, log: logPush(logOf(a), waitRow) }))
+    else {
+      const held = takeStream()
+      await put($, mainState, (m): MainRun => ({ ...m, status: 'waiting', doing, doingSince: at, log: logPush(withRows(logOf(m), held), waitRow) }))
+    }
   } catch {
     // The row keeps saying what it was doing.
   }
@@ -1729,7 +1964,7 @@ async function addRun($: EngineInterface, e: In<'agent.spawn'>, agentId: string 
   const isRerun = !!settled && settled.isFinished && !!norm(description) && (settled.tasks ?? []).some(t => norm(String(t?.title ?? '')) === norm(description))
   const reopened = isRerun ? reopenedFlow(settled, null) : null
   if (reopened) {
-    await update($, flowState, () => ({ ...reopened, reportedAt: at }))
+    await put($, flowState, () => ({ ...reopened, reportedAt: at }))
     await resetMark($)
   }
   const flow = await read($, flowState)
@@ -1739,13 +1974,14 @@ async function addRun($: EngineInterface, e: In<'agent.spawn'>, agentId: string 
   // The run as it stands before this agent joins it, for its place among those of its kind.
   const runBefore = await read($, runState).catch(() => null)
   let evicted: AgentRun[] = []
-  await update($, agentsState, prev => {
+  await putAgents($, prev => {
+    evicted = []
     const list = prev.map(normalizeAgent)
     const known = agentId === undefined ? undefined : list.find(a => a.agentId === agentId)
     if (known) {
       // A resumed agent keeps its row, its tokens and its log.
       return list.map(a =>
-        a === known ? { ...a, status: 'running', endedAt: undefined, doing: 'Getting started', doingSince: at, log: pushLog(logOf(a), logEntry(at, 'note', 'Resumed')) } : a,
+        a === known ? { ...a, status: 'running', endedAt: undefined, doing: 'Getting started', doingSince: at, log: logPush(logOf(a), logEntry(at, 'note', 'Resumed')) } : a,
       )
     }
     const round = 1 + (description ? list.filter(a => norm(a.description) === norm(description)).length : 0)
@@ -1778,7 +2014,7 @@ async function addRun($: EngineInterface, e: In<'agent.spawn'>, agentId: string 
   // Every subagent, of any type, joins the run under way or starts the next one. The join
   // is timed after its row is in the list, so a prompt that read the list before it leaves the run open.
   const joinAt = await $.clock.now()
-  await update($, runState, r => joinRun(r, id, joinAt))
+  await put($, runState, r => joinRun(r, id, joinAt))
   await holdFill($, at)
   await stamp($)
   const plan = await read($, flowState)
@@ -1808,7 +2044,7 @@ async function onPromptSubmit($: EngineInterface, e: In<'prompt.submit'>, next: 
       const at = await $.clock.now()
       const list = await read($, agentsState)
       const rows = Array.isArray(list) ? list : []
-      await update($, runState, prev => closedRun(prev, rows, at, at))
+      await put($, runState, prev => closedRun(prev, rows, at, at))
       await holdFill($, at)
     }
   } catch {
@@ -1842,23 +2078,24 @@ async function onTurnStart($: EngineInterface, e: In<'turn.start'>, next: NextOf
     } else {
       live.turnActions = 0
       const prompt = clip(printable(e.text), 60)
-      await update($, mainState, (m): MainRun => ({
+      const held = takeStream()
+      await put($, mainState, (m): MainRun => ({
         ...m,
         status: 'working',
         turns: m.turns + 1,
         turnStartedAt: at,
         doing: 'Reading your prompt',
         doingSince: at,
-        log: pushLog(logOf(m), logEntry(at, 'turn', prompt || 'Continued')),
+        log: logPush(withRows(logOf(m), held), logEntry(at, 'turn', prompt || 'Continued')),
       }))
       const m = await read($, mainState)
-      const list = await read($, agentsState)
+      const list = cleanRows(await read($, agentsState))
       const retired = normalizeRetired(await read($, retiredState).catch(() => null))
-      await update($, usageState, u => ({ ...u, costAtTurnStart: totals(m, list, u, at, retired).costUsd, turnCostUsd: 0 }))
-      await update($, nowState, () => at)
+      await put($, usageState, u => ({ ...u, costAtTurnStart: totals(m, list, u, at, retired).costUsd, turnCostUsd: 0 }))
+      await put($, nowState, () => at)
       // The model the session runs on now: `/model` may have changed it between turns.
       const model = await $.session.model().catch(() => '')
-      if (model) await update($, mainState, (x): MainRun => (x.model === model ? x : { ...x, model, contextMax: windowOf(model) }))
+      if (model) await put($, mainState, (x): MainRun => (x.model === model ? x : { ...x, model, contextMax: windowOf(model) }))
     }
   } catch {
     // The panel catches up at the turn's first step.
@@ -1876,29 +2113,79 @@ function phaseRow(f: Follow, at: number): LogEntry | null {
   return null
 }
 
-// Puts what the stream says on the main row: at once on a new phase, else at most every 250 ms.
-async function show($: EngineInterface, f: Follow, phase: string, doing: string, at: number): Promise<void> {
-  const isNewPhase = phase !== f.phase
-  if (!isNewPhase && (doing === f.shown || at - f.wroteAt < THROTTLE_MS)) {
-    f.pending = doing === f.shown ? '' : doing
-    return
+// What the stream has for the main row and not written yet (A6): its line, the phases that
+// ended (their log rows) and when the newest phase began. Written at once, then at most once
+// a second: a write holds the stream for STREAM_MS, and what came meanwhile is written as the
+// hold ends. Module state: one main loop per session.
+const STREAM_MS = 1_000
+// `until`: when the hold ends; `gen` names the hold, so the timer of one the tick ended early does nothing.
+const streamHeld: { isHeld: boolean; until: number; gen: number; doing: string; rows: LogEntry[]; since: number | null } = { isHeld: false, until: 0, gen: 0, doing: '', rows: [], since: null }
+
+type Held = { doing: string; rows: LogEntry[]; since: number | null }
+
+// What the stream holds, taken: a writer of the main row that comes after it logs its rows
+// and puts its own line in place of the stream's.
+function takeStream(): Held {
+  const held: Held = { doing: streamHeld.doing, rows: streamHeld.rows, since: streamHeld.since }
+  streamHeld.doing = ''
+  streamHeld.rows = []
+  streamHeld.since = null
+  return held
+}
+
+const withRows = (log: LogEntry[], held: Held): LogEntry[] => held.rows.reduce((out, x) => logPush(out, x), log)
+
+// Writes what the stream holds.
+async function writeStream($: EngineInterface): Promise<void> {
+  const held = takeStream()
+  if (!held.doing && !held.rows.length) return
+  streamHeld.isHeld = true
+  const gen = (streamHeld.gen += 1)
+  // The clock read for this write: the hold's end, which the tick also keeps (`streamDue`).
+  streamHeld.until = (await $.clock.now().catch(() => 0)) + STREAM_MS
+  try {
+    $.clock.after(STREAM_MS, () => {
+      if (gen !== streamHeld.gen) return
+      streamHeld.isHeld = false
+      if (streamHeld.doing || streamHeld.rows.length) void writeStream($).catch(() => undefined)
+    })
+  } catch {
+    streamHeld.isHeld = false
   }
-  const ended = isNewPhase ? phaseRow(f, at) : null
-  if (isNewPhase) {
-    f.phase = phase
-    f.phaseAt = at
-  }
-  f.shown = doing
-  f.pending = ''
-  f.wroteAt = at
   // A response streaming in a turn means any approval it waited on was answered.
-  await update($, mainState, (m): MainRun => ({
+  await put($, mainState, (m): MainRun => ({
     ...m,
     status: m.turnStartedAt !== null ? 'working' : m.status,
-    doing,
-    doingSince: isNewPhase ? at : m.doingSince,
-    log: ended ? pushLog(logOf(m), ended) : logOf(m),
+    doing: held.doing || m.doing,
+    doingSince: held.since ?? m.doingSince,
+    log: withRows(logOf(m), held),
   }))
+}
+
+// The tick's part: a held line whose hold has ended is written before the frames are composed,
+// so a frame of that second has it whichever timer of that moment runs first.
+async function streamDue($: EngineInterface, at: number): Promise<void> {
+  if (!streamHeld.isHeld || at < streamHeld.until || (!streamHeld.doing && !streamHeld.rows.length)) return
+  streamHeld.isHeld = false
+  await writeStream($)
+}
+
+// Puts what the stream says on the main row, at most once a second. A new phase is timed
+// (one clock read per phase, never per chunk) and the phase it ends is logged.
+async function show($: EngineInterface, f: Follow, phase: string, doing: string): Promise<void> {
+  const isNewPhase = phase !== f.phase
+  if (isNewPhase) {
+    const at = await $.clock.now()
+    f.startedAt ??= at
+    const ended = phaseRow(f, at)
+    if (ended) streamHeld.rows.push(ended)
+    f.phase = phase
+    f.phaseAt = at
+    streamHeld.since = at
+  } else if (doing === f.shown) return
+  f.shown = doing
+  streamHeld.doing = doing
+  if (!streamHeld.isHeld) await writeStream($)
 }
 
 async function timeSpeed($: EngineInterface, f: Follow, usage: TurnUsage | null, at: number): Promise<void> {
@@ -1907,49 +2194,53 @@ async function timeSpeed($: EngineInterface, f: Follow, usage: TurnUsage | null,
   const tokens = usage.output_tokens
   const seconds = (at - f.startedAt) / 1000
   const speed = tokens / seconds
-  if (tokens >= MIN_TOKENS && seconds >= MIN_SECONDS && speed <= MAX_SPEED) await update($, usageState, u => ({ ...u, speed: Math.round(speed) }))
+  if (tokens >= MIN_TOKENS && seconds >= MIN_SECONDS && speed <= MAX_SPEED) await put($, usageState, u => ({ ...u, speed: Math.round(speed) }))
 }
 
+// No clock read here: a chunk only reads it when it starts a phase (`show`) or stops (A6).
 async function follow($: EngineInterface, f: Follow, chunk: TurnStepChunk): Promise<void> {
-  const at = await $.clock.now()
-  f.startedAt ??= at
   switch (chunk.kind) {
     case 'thinking': {
       // A new thought starts its own buffer; the one before was logged when it ended.
       if (f.phase !== 'think') f.thinking = ''
       f.thinking = (f.thinking + chunk.text).slice(-MAX_THINKING)
       const thought = thoughtOf(f.thinking)
-      return show($, f, 'think', thought ? `Thinking: ${thought}` : 'Thinking', at)
+      return show($, f, 'think', thought ? `Thinking: ${thought}` : 'Thinking')
     }
     case 'text':
-      return show($, f, 'reply', 'Writing the reply', at)
+      return show($, f, 'reply', 'Writing the reply')
     case 'tool':
       f.tool = chunk.name
       f.input = ''
-      return show($, f, `tool:${chunk.index}`, activityOf(chunk.name, {}), at)
+      return show($, f, `tool:${chunk.index}`, activityOf(chunk.name, {}))
     case 'input':
       if (f.input.length < MAX_INPUT) f.input = (f.input + chunk.json).slice(0, MAX_INPUT)
-      return show($, f, f.phase, activityOf(f.tool, partialArgsOf(f.input)), at)
-    case 'stop':
+      return show($, f, f.phase, activityOf(f.tool, partialArgsOf(f.input)))
+    case 'stop': {
+      const at = await $.clock.now()
+      f.startedAt ??= at
       return timeSpeed($, f, chunk.usage, at)
+    }
     default:
       return
   }
 }
 
-// The stream's end: the line a throttle held back, and the phase that was still open.
+// The stream's end: the phase that was still open is logged, with what the hold kept back,
+// at once or as the hold ends.
 async function flush($: EngineInterface, f: Follow): Promise<void> {
-  const at = await $.clock.now()
-  const ended = phaseRow(f, at)
-  const doing = f.pending
-  if (!ended && !doing) return
-  await update($, mainState, m => ({ ...m, doing: doing || m.doing, log: ended ? pushLog(logOf(m), ended) : logOf(m) }))
+  if (f.phase === 'think' || f.phase === 'reply') {
+    const ended = phaseRow(f, await $.clock.now())
+    if (ended) streamHeld.rows.push(ended)
+    f.phase = ''
+  }
+  if (!streamHeld.isHeld) await writeStream($)
 }
 
 async function addMainStep($: EngineInterface, e: In<'turn.step'>, usage: TurnUsage | null): Promise<void> {
-  await update($, mainState, m => {
+  await put($, mainState, m => {
     const effort = typeof e.effort === 'string' ? e.effort : m.effort
-    if (!usage) return { ...m, effort }
+    if (!usage) return effort === m.effort ? m : { ...m, effort }
     const model = usage.model || e.model || m.model
     const spent = costOf(model, usage, true)
     return {
@@ -1978,7 +2269,7 @@ async function* onTurnStep($: EngineInterface, e: In<'turn.step'>, next: NextOf<
     return result
   }
 
-  const f: Follow = { phase: '', phaseAt: 0, thinking: '', tool: '', input: '', shown: '', pending: '', wroteAt: 0, startedAt: null }
+  const f: Follow = { phase: '', phaseAt: 0, thinking: '', tool: '', input: '', shown: '', startedAt: null }
   const stream = next(e)
   for await (const chunk of stream) {
     try {
@@ -2025,9 +2316,10 @@ async function endRun($: EngineInterface, e: In<'turn.complete'>, agentId: strin
 
 async function endMainTurn($: EngineInterface, e: In<'turn.complete'>): Promise<void> {
   const at = await $.clock.now()
-  const n = (await read($, agentsState)).filter(isActive).length
+  const n = cleanRows(await read($, agentsState)).filter(isActive).length
   const actions = live.turnActions
-  await update($, mainState, (m): MainRun => {
+  const held = takeStream()
+  await put($, mainState, (m): MainRun => {
     const worked = m.turnStartedAt === null ? 0 : Math.max(0, at - m.turnStartedAt)
     const ms = fin(e.durationMs) ?? worked
     const [text, outcome] = endText(e.reason, ms, actions)
@@ -2038,11 +2330,11 @@ async function endMainTurn($: EngineInterface, e: In<'turn.complete'>): Promise<
       status: n > 0 ? 'waiting' : 'resting',
       doing: n > 0 ? waitingFor(n) : 'Resting',
       doingSince: at,
-      log: pushLog(closeAll(logOf(m), at, outcome), logEntry(at, 'end', text, outcome, ms)),
+      log: logPush(closeAll(withRows(logOf(m), held), at, outcome), logEntry(at, 'end', text, outcome, ms)),
     }
   })
-  await update($, usageState, u => ({ ...u, cacheExpiresAt: at + CACHE_TTL_MS }))
-  await update($, nowState, () => at)
+  await put($, usageState, u => ({ ...u, cacheExpiresAt: at + CACHE_TTL_MS }))
+  await put($, nowState, () => at)
 }
 
 async function onTurnComplete($: EngineInterface, e: In<'turn.complete'>, next: NextOf<'turn.complete'>) {
@@ -2069,9 +2361,9 @@ async function onMeasure($: EngineInterface, e: In<'session.measure'>, next: Nex
   try {
     const at = await $.clock.now()
     const m = await read($, mainState)
-    const list = await read($, agentsState)
+    const list = cleanRows(await read($, agentsState))
     const retired = normalizeRetired(await read($, retiredState).catch(() => null))
-    const u = await update($, usageState, prev => withTurnCost(measured(prev, e, at), m, list, at, retired))
+    const u = await put($, usageState, prev => withTurnCost(measured(prev, e, at), m, list, at, retired))
     await keepLimits($, u)
   } catch {
     // The figures stay at the last reading.
@@ -2080,31 +2372,70 @@ async function onMeasure($: EngineInterface, e: In<'session.measure'>, next: Nex
 }
 
 // ---------------------------------------------------------------------------
-// Render helpers. They read state and never write it; writes happen in presses.
+// What a frame is composed from. Never in a render hook: a render reads the frames.
 
-async function snapshot($: EngineInterface): Promise<Snap> {
-  const [rawFlow, run, rawList, rawRetired, rawMain, usage, view, rates, now, model, clock] = await Promise.all([
-    read($, flowState),
-    read($, runState).catch(() => null),
-    read($, agentsState),
+// The values as read, any of them junk an older version stored.
+type Raw = { flow?: unknown; run?: unknown; agents?: unknown; retired?: unknown; main?: unknown; usage?: unknown; view?: unknown; rates?: unknown; now?: unknown }
+
+// Reads the bookkeeping values and composes the snap both frames are cut from, at the clock now.
+// `isBusy`: the main loop works or an agent is active, so the bar's time runs to the ms.
+// What composing read of each value, by the count of this load's writes to it when read: a
+// frame composed while nothing was written reads no value again (`put` counts the writes).
+const readCache = new Map<string, { gen: number; value: unknown }>()
+const writeGens = new Map<string, number>()
+
+async function cachedRead(key: string, get: () => Promise<unknown>, fallback: unknown): Promise<unknown> {
+  const gen = writeGens.get(key) ?? 0
+  const hit = readCache.get(key)
+  if (hit && hit.gen === gen) return hit.value
+  try {
+    const value = await get()
+    if ((writeGens.get(key) ?? 0) === gen) readCache.set(key, { gen, value })
+    return value
+  } catch {
+    return fallback
+  }
+}
+
+async function composeSnap($: EngineInterface): Promise<{ snap: FrameSnap; clock: number; isBusy: boolean }> {
+  const [flow, run, agents, retired, main, usage, view, rates, now, model, clock] = await Promise.all([
+    cachedRead('flow', () => read($, flowState), null),
+    cachedRead('run', () => read($, runState), null),
+    cachedRead('agents', () => read($, agentsState), []),
     // State from an older version has no tally: zero.
-    read($, retiredState).catch(() => null),
-    read($, mainState),
-    read($, usageState),
-    read($, viewState),
-    read($, ratesState),
-    read($, nowState),
+    cachedRead('retired', () => read($, retiredState), null),
+    cachedRead('main', () => read($, mainState), null),
+    cachedRead('usage', () => read($, usageState), null),
+    cachedRead('view', () => read($, viewState), null),
+    cachedRead('rates', () => read($, ratesState), null),
+    cachedRead('now', () => read($, nowState), 0),
     // The model the session runs on now, which `/model` changes without an event.
     $.session.model().catch(() => ''),
     $.clock.now().catch(() => 0),
   ])
+  const snap = snapOf({ flow, run, agents, retired, main, usage, view, rates, now }, typeof model === 'string' ? model : '', clock)
+  const isBusy = snap.main.turnStartedAt !== null || snap.running > 0
+  // While anything works the tick writes no `now`: the frame's own time stands in for it.
+  return { snap: isBusy && clock > snap.at ? { ...snap, at: clock } : snap, clock, isBusy }
+}
+
+// The snap, pure: every value read as junk may have it (A10). Records only, a row lacking an
+// id, a description or a usage tally given safe ones, a main agent or a usage that is not a
+// record read as blank.
+function snapOf(raw: Raw, model: string, clock: number): FrameSnap {
   // A hot reload hands this code what v1 wrote: runs and the main agent may lack a log.
   // Runs and planned tasks 1.6 wrote (a role, no kind) read as 2.0 keeps them.
-  const list = (Array.isArray(rawList) ? rawList : []).map(a => normalizeAgent(Array.isArray(a.log) ? a : { ...a, log: [] }))
-  const flow = rawFlow ? { ...rawFlow, tasks: normalizeTasks(rawFlow.tasks) } : rawFlow
-  const logged = Array.isArray(rawMain.log) ? rawMain : { ...rawMain, log: [] }
-  const main = typeof model === 'string' && model ? { ...logged, model } : logged
-  const at = Math.max(now, main.turnStartedAt ?? 0, ...list.map(a => a.startedAt), 0)
+  const list = cleanRows(raw.agents).map(normalizeAgent)
+  const rawFlow = isRecord(raw.flow) ? (raw.flow as Flow) : null
+  const flow = rawFlow ? { ...rawFlow, tasks: normalizeTasks(rawFlow.tasks) } : null
+  const run = isRecord(raw.run) ? (raw.run as Run) : null
+  const rawMain = isRecord(raw.main) ? (raw.main as Partial<MainRun>) : {}
+  const logged: MainRun = { ...blankMain(0), ...rawMain, log: logOf(rawMain) }
+  if (typeof logged.turnStartedAt !== 'number') logged.turnStartedAt = null
+  const main = model ? { ...logged, model } : logged
+  const usage: Usage = isRecord(raw.usage) ? { ...blankUsage(0), ...(raw.usage as Partial<Usage>) } : blankUsage(0)
+  const now = fin(raw.now) ?? 0
+  const at = list.reduce((x, a) => Math.max(x, fin(a.startedAt) ?? 0), Math.max(now, main.turnStartedAt ?? 0, 0))
   // A session whose start was missed counts from now rather than from 1970.
   const u = usage.sessionStartedAt > 0 ? usage : { ...usage, sessionStartedAt: at }
   // Active means running or waiting: an agent waiting for approval is still at work.
@@ -2125,20 +2456,36 @@ async function snapshot($: EngineInterface): Promise<Snap> {
     flow: shown.flow,
     // The planned rows follow the bar: a plan it no longer shows has none.
     plan: shown.isPlan ? flow : null,
-    run,
     crew: shown.crew,
     creep,
     list,
-    retired: normalizeRetired(rawRetired),
+    retired: normalizeRetired(raw.retired),
     main,
     usage: u,
-    view: normalizeView(view),
-    settings: settingsNow(),
-    rates,
+    view: normalizeView(raw.view),
+    rates: ratesOf(raw.rates),
     at,
     running,
     state,
   }
+}
+
+// What a render draws: its frame with the settings as they are. Before the first frame (a
+// fresh load), the idle state from blank values and the view as it stands, and a frame asked
+// for, to be written by a timer once the render is done (A5).
+async function drawnSnap($: EngineInterface, site: 'pane' | 'bar'): Promise<{ s: Snap; frameClock: number }> {
+  const frame = await (site === 'pane' ? read($, paneFrameState) : read($, barFrameState)).catch(() => null)
+  const clock = await $.clock.now().catch(() => 0)
+  if (isRecord(frame) && isRecord(frame.snap)) {
+    const f = frame as Frame
+    // A site drawn long after its frame was composed (a mount after an idle spell) asks for a
+    // fresh one; it is written only if it differs, so a redraw for a new frame asks for none.
+    if (!(clock - (fin(f.madeAt) ?? 0) < FRAME_MS)) framesStale($)
+    return { s: { ...f.snap, settings: settingsNow() }, frameClock: fin(f.clock) ?? 0 }
+  }
+  const view = await read($, viewState).catch(() => null)
+  framesStale($)
+  return { s: { ...snapOf({ view }, '', clock), settings: settingsNow() }, frameClock: clock }
 }
 
 // The clock as a render runs: entrances are timed by it, since `now` stands still while nothing runs.
@@ -2158,7 +2505,14 @@ function ensureTicker($: EngineInterface): void {
 }
 
 // A press handler whose failure is the press's alone.
-const act = (work: () => Promise<unknown>) => (): Promise<unknown> => work().catch(() => undefined)
+// A press writes the frames at once (A5): what it changed shows without waiting for the second.
+const act =
+  ($: EngineInterface, work: () => Promise<unknown>) =>
+  async (): Promise<unknown> => {
+    const out = await work().catch(() => undefined)
+    await framesNow($).catch(() => undefined)
+    return out
+  }
 
 // How long ago an entrance began: a drawing given it continues the motion on a redraw
 // instead of playing it again. Undefined when none began, or with animations off.
@@ -2359,7 +2713,11 @@ function wordsOf(p: PillCtx, kind: PillKind, gauge?: Gauge): PillWords | null {
   try {
     const data = { usage: p.s.usage, main: p.s.main, isWorking: p.isWorking, now: p.at, isNarrow: p.isNarrow }
     const w = pillText(kind, gauge ? { ...data, gauge } : data)
-    return w && typeof w.value === 'string' ? w : null
+    if (!w || typeof w.value !== 'string') return null
+    // The cache countdown in whole minutes until five are left, then `m:ss` (A7); the tone stays.
+    const expires = p.s.usage.cacheExpiresAt
+    if (kind === 'cache' && typeof expires === 'number' && /^\d+:\d\d$/.test(w.value) && expires > p.at) return { ...w, value: countdownText(expires - p.at) }
+    return w
   } catch {
     return null
   }
@@ -2602,8 +2960,8 @@ type PaneFlags = { isSettingsOpen: boolean; isGuideOpen: boolean }
 // drawn active while what it opens is open (compact: while the panel is compact).
 function titleControls($: EngineInterface, ui: Kit, s: Snap, panes: PaneFlags, opts: IconOpts): RenderElement[] {
   return [
-    iconButton(ui, 'open-guide', 'help', panes.isGuideOpen ? 'Close the guide' : 'Open the guide', act(() => toggleGuide($)), { ...opts, active: panes.isGuideOpen }),
-    iconButton(ui, 'open-settings', 'gear', panes.isSettingsOpen ? 'Close the settings' : 'Open the settings', act(() => toggleSettings($)), {
+    iconButton(ui, 'open-guide', 'help', panes.isGuideOpen ? 'Close the guide' : 'Open the guide', act($, () => toggleGuide($)), { ...opts, active: panes.isGuideOpen }),
+    iconButton(ui, 'open-settings', 'gear', panes.isSettingsOpen ? 'Close the settings' : 'Open the settings', act($, () => toggleSettings($)), {
       ...opts,
       active: panes.isSettingsOpen,
     }),
@@ -2612,7 +2970,7 @@ function titleControls($: EngineInterface, ui: Kit, s: Snap, panes: PaneFlags, o
       'toggle-compact',
       s.view.isCompact ? 'full' : 'compact',
       s.view.isCompact ? 'Show the full panel' : 'Show the compact panel',
-      act(() => toggleView($, 'isCompact')),
+      act($, () => toggleView($, 'isCompact')),
       { ...opts, active: s.view.isCompact },
     ),
   ]
@@ -2699,8 +3057,8 @@ function agentsDesktop($: EngineInterface, ui: SvgKit, s: Snap, columns: number,
   // A control with nothing to go to leaves its place empty, so the other stays put.
   const pageFoot = (key: string, pg: Paged, total: number): RenderElement => {
     const gap = (side: string): RenderElement => iconGap(ui, `${key}-${side}-gap`, PANEL_ICON)
-    const prev = pg.before > 0 ? iconButton(ui, `${key}-prev`, 'prev', 'Show the earlier rows', act(() => setRowPage($, pg.page - 1, pg.prevFirst)), PANEL_ICON) : gap('prev')
-    const next = pg.after > 0 ? iconButton(ui, `${key}-next`, 'next', 'Show the later rows', act(() => setRowPage($, pg.page + 1, pg.nextFirst)), PANEL_ICON) : gap('next')
+    const prev = pg.before > 0 ? iconButton(ui, `${key}-prev`, 'prev', 'Show the earlier rows', act($, () => setRowPage($, pg.page - 1, pg.prevFirst)), PANEL_ICON) : gap('prev')
+    const next = pg.after > 0 ? iconButton(ui, `${key}-next`, 'next', 'Show the later rows', act($, () => setRowPage($, pg.page + 1, pg.nextFirst)), PANEL_ICON) : gap('next')
     const words = `Rows ${pg.before + 1}–${pg.before + pg.rows.length} of ${total}`
     return sideRow(
       ui,
@@ -2770,7 +3128,7 @@ function agentsDesktop($: EngineInterface, ui: SvgKit, s: Snap, columns: number,
         parts.push(tooLarge(id))
         return
       }
-      const icon = iconButton(ui, `log-${id}`, isOpen ? 'logOpen' : 'log', isOpen ? 'Hide the log' : 'Show the log', act(() => toggleLog($, id)), { ...PANEL_ICON, active: isOpen })
+      const icon = iconButton(ui, `log-${id}`, isOpen ? 'logOpen' : 'log', isOpen ? 'Hide the log' : 'Show the log', act($, () => toggleLog($, id)), { ...PANEL_ICON, active: isOpen })
       height += Math.max(d.height, BTN_ROW_H / z)
       parts.push(sideRow(ui, `line-${id}`, item(`row-${id}`, d), rightCol(ui, `icons-${id}`, PANEL_COL, [icon])))
       if (!isOpen) return
@@ -2839,7 +3197,7 @@ function agentsDesktop($: EngineInterface, ui: SvgKit, s: Snap, columns: number,
         'toggle-done',
         isFolded ? 'unfold' : 'fold',
         isFolded ? 'Show the finished agents' : 'Hide the finished agents',
-        act(() => toggleView($, 'isDoneCollapsed')),
+        act($, () => toggleView($, 'isDoneCollapsed')),
         PANEL_ICON,
       )
       height += Math.max(d.height, BTN_ROW_H / z)
@@ -2898,7 +3256,7 @@ function agentsText($: EngineInterface, ui: Kit, s: Snap, clock: number, panes: 
   // A row and its log icon; with the log open, its last entries under it and a copy icon.
   const line = (id: string, text: string, rowLog: LogEntry[] | null, isDim = false): RenderElement => {
     const isOpen = s.view.openLogs.includes(id)
-    const logIcon = iconButton(ui, `log-${id}`, isOpen ? 'logOpen' : 'log', isOpen ? 'Hide the log' : 'Show the log', act(() => toggleLog($, id)), { ...icon, active: isOpen })
+    const logIcon = iconButton(ui, `log-${id}`, isOpen ? 'logOpen' : 'log', isOpen ? 'Hide the log' : 'Show the log', act($, () => toggleLog($, id)), { ...icon, active: isOpen })
     const head = sideRow(
       ui,
       `line-${id}`,
@@ -2963,7 +3321,7 @@ function agentsText($: EngineInterface, ui: Kit, s: Snap, clock: number, panes: 
     'toggle-done',
     s.view.isDoneCollapsed ? 'unfold' : 'fold',
     s.view.isDoneCollapsed ? 'Show the finished agents' : 'Hide the finished agents',
-    act(() => toggleView($, 'isDoneCollapsed')),
+    act($, () => toggleView($, 'isDoneCollapsed')),
     icon,
   )
   return (
@@ -3041,8 +3399,8 @@ function settingsPane($: EngineInterface, ui: Kit, s: Settings, order: readonly 
       <Box width={ORDER_NAME} flexShrink={0}>
         <Text dimColor={!s.barItems.includes(item)}>{BAR_ITEMS.find(b => b.key === item)?.label ?? item}</Text>
       </Box>
-      {button(ui, `up-${item}`, '▲', act(() => moveItem($, item, -1)))}
-      {button(ui, `down-${item}`, '▼', act(() => moveItem($, item, 1)))}
+      {button(ui, `up-${item}`, '▲', act($, () => moveItem($, item, -1)))}
+      {button(ui, `down-${item}`, '▼', act($, () => moveItem($, item, 1)))}
     </Box>
   )
   // `Panel text   [ − ]  100%  [ + ]`: each press steps the sizes as they are at the press.
@@ -3051,11 +3409,11 @@ function settingsPane($: EngineInterface, ui: Kit, s: Settings, order: readonly 
       <Box width={STEPPER_NAME} flexShrink={0}>
         <Text>{x.name}</Text>
       </Box>
-      {button(ui, `size-${x.key}-down`, '−', act(() => stepSize($, x.key, -1)))}
+      {button(ui, `size-${x.key}-down`, '−', act($, () => stepSize($, x.key, -1)))}
       <Box width={STEPPER_VALUE} flexShrink={0} justifyContent="center">
         <Text tabular>{x.shown(sizes)}</Text>
       </Box>
-      {button(ui, `size-${x.key}-up`, '+', act(() => stepSize($, x.key, 1)))}
+      {button(ui, `size-${x.key}-up`, '+', act($, () => stepSize($, x.key, 1)))}
     </Box>
   )
   return withGutter(
@@ -3079,7 +3437,7 @@ function settingsPane($: EngineInterface, ui: Kit, s: Settings, order: readonly 
         <Box width={STEPPER_NAME} flexShrink={0}>
           <Text>Hero cards</Text>
         </Box>
-        {button(ui, 'hero-card', s.heroCard ? 'On' : 'Off', act(() => flipHero($)))}
+        {button(ui, 'hero-card', s.heroCard ? 'On' : 'Off', act($, () => flipHero($)))}
       </Box>
       <Text size="heading" weight="semibold">
         Bar items order
@@ -3117,7 +3475,8 @@ async function beforeRender($: EngineInterface): Promise<void> {
 async function renderAgents($: EngineInterface, e: Parameters<PaneHook>[1]) {
   await beforeRender($)
   const ui = $.ui.resolve(e)
-  const s = await snapshot($)
+  // The pane's frame alone (A4); entrances and loops run on the clock as it draws.
+  const { s } = await drawnSnap($, 'pane')
   const clock = await clockOf($, s)
   const panes = await paneFlags($)
   const { Box, Text, Button } = ui
@@ -3150,7 +3509,8 @@ async function renderGuide($: EngineInterface, e: Parameters<GuideHook>[1]) {
 async function renderBar($: EngineInterface, e: Parameters<BarHook>[1], next: Parameters<BarHook>[2]) {
   if (e.props.hasSurvey) return next(e)
   await beforeRender($)
-  const s = await snapshot($)
+  // The bar's frame alone (A4): its times are the frame's, so they step together (A7).
+  const { s, frameClock } = await drawnSnap($, 'bar')
   // This row is drawn with the other mods' bands beneath it. Claude Code's own
   // placeholder ({ type: 'engine' }) is never nested: the desktop drops a band that nests it.
   const drawn = await Promise.resolve(next(e)).catch(() => null)
@@ -3160,7 +3520,7 @@ async function renderBar($: EngineInterface, e: Parameters<BarHook>[1], next: Pa
   const { Box, Text, Button } = ui
   const isDesktop = e.surface === 'desktop' && 'Svg' in ui
   const kit: Kit = isDesktop ? { Box, Text, Button, Svg: ui.Svg } : { Box, Text, Button }
-  // The cache countdown runs while nothing else does, so the bar reads the clock itself.
+  // Entrances and loops run on the clock as it draws.
   const clock = await clockOf($, s)
   const running = s.running
   const isCollapsed = s.view.isBarCollapsed
@@ -3168,7 +3528,7 @@ async function renderBar($: EngineInterface, e: Parameters<BarHook>[1], next: Pa
   const iconOpts: IconOpts = { padX: ICON_PAD, marginY: 0 }
   const b: BarParts = {
     s,
-    at: Math.max(s.at, clock),
+    at: Math.max(s.at, frameClock),
     clock,
     columns: e.props.bodyColumns,
     // A plan counts its agents and planned tasks, a run its agents, the idle row none: `×0`.
@@ -3177,8 +3537,8 @@ async function renderBar($: EngineInterface, e: Parameters<BarHook>[1], next: Pa
     isWorking: s.main.status === 'working' || running > 0,
     // Hover cards on the pills: the desktop only, and only with the option on.
     isTips: isDesktop && s.settings.barTooltips,
-    collapse: iconButton(kit, 'bar-collapse', isCollapsed ? 'expand' : 'collapse', isCollapsed ? 'Expand the bar' : 'Collapse the bar', act(() => toggleBar($)), iconOpts),
-    panel: iconButton(kit, 'bar-panel', isPaneOpen ? 'panelOpen' : 'panel', isPaneOpen ? 'Close the agents panel' : 'Open the agents panel', act(() => togglePane($)), {
+    collapse: iconButton(kit, 'bar-collapse', isCollapsed ? 'expand' : 'collapse', isCollapsed ? 'Expand the bar' : 'Collapse the bar', act($, () => toggleBar($)), iconOpts),
+    panel: iconButton(kit, 'bar-panel', isPaneOpen ? 'panelOpen' : 'panel', isPaneOpen ? 'Close the agents panel' : 'Open the agents panel', act($, () => togglePane($)), {
       ...iconOpts,
       active: isPaneOpen,
     }),

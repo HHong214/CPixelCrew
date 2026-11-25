@@ -40,7 +40,12 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 export const xml = (s: string): string =>
   s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] ?? c)
 
-export const clip = (s: string, max: number): string => (s.length > max ? s.slice(0, Math.max(1, max - 1)) + '…' : s)
+// A cut never ends in half of a surrogate pair: an emoji is kept whole or left out.
+export const clip = (s: string, max: number): string => {
+  if (s.length <= max) return s
+  const cut = s.slice(0, Math.max(1, max - 1))
+  return (/[\uD800-\uDBFF]$/.test(cut) ? cut.slice(0, -1) : cut) + '…'
+}
 
 // CJK, fullwidth forms and emoji advance about 1em; sized at 0.56em a Chinese title overlapped what followed it.
 export const WIDE =
@@ -1423,8 +1428,10 @@ export function mergeFlow(prev: Flow | null, input: ProgressInput): Flow {
   const title = typeof i.title === 'string' && i.title.trim() ? clip(i.title.trim(), MAX_TITLE) : undefined
   // A new title means a new flow: never carry counters over from an earlier one.
   const base = !prev || prev.isFinished || (title !== undefined && title !== prev.title) ? blankFlow() : { ...blankFlow(), ...prev }
-  const tasks = cleanTasks(i.tasks) ?? normalizeTasks(base.tasks)
-  const total = clamp(Math.round(num(i.total) ?? (Array.isArray(i.tasks) ? tasks.length : base.total)), 0, MAX_TASKS)
+  // An empty task list is no report of tasks: the plan keeps its own.
+  const given = Array.isArray(i.tasks) && i.tasks.length > 0 ? i.tasks : undefined
+  const tasks = cleanTasks(given) ?? normalizeTasks(base.tasks)
+  const total = clamp(Math.round(num(i.total) ?? (given ? tasks.length : base.total)), 0, MAX_TASKS)
   const done = clamp(Math.round(num(i.done) ?? base.done), 0, total || MAX_TASKS)
   const phase = pick(PHASES, i.phase) ?? base.phase
   const isFinished = i.finished === true
@@ -1699,7 +1706,9 @@ export function viewFill(view: BarView, run: Run | null, list: AgentRun[], now: 
  * counted stuck that is live again: it was counted over, so the fill drops back once.
  */
 export function heldRun(run: Run, key: string, fill: number, quiet?: { stuck: string[]; live: string[] }): Run {
-  const f = clamp(num(fill) ?? 0, 0, 1)
+  // Down to a thousandth (never up, so the mark never shows more than the fill), so a fill
+  // that did not move leaves the run as it was (the same object).
+  const f = Math.floor(clamp(num(fill) ?? 0, 0, 1) * 1000 + 1e-9) / 1000
   const wasQuiet = Array.isArray(run.quiet) ? run.quiet : []
   const isRevived = !!quiet && wasQuiet.some(id => quiet.live.includes(id))
   const stuck = quiet ? quiet.stuck : run.quiet
@@ -1764,6 +1773,124 @@ export function capRows(list: AgentRun[], max = MAX_ROWS, maxActive = MAX_ACTIVE
     for (const a of finished.slice(0, over)) gone.add(a)
   }
   return { kept: rows.filter(a => !gone.has(a)), removed: rows.filter(a => gone.has(a)) }
+}
+
+/** The most log entries a live row, or the main agent, keeps; a finished row keeps the Log lines size. */
+export const LIVE_LOG = 200
+/** The stored agent list's ceiling, in characters of JSON: well under the engine's 4,194,304 for one value. */
+export const AGENTS_LIMIT = 1_000_000
+// A fit cuts to this share of the limit, so the next writes do not each fit the list again.
+const FIT_ROOM = 0.9
+// What a finished row's log is cut to before it is emptied.
+const FINISHED_LOG = 10
+
+const JSON_SPECIAL = /["\\\u0000-\u001f\ud800-\udfff]/
+
+/**
+ * An upper bound of `JSON.stringify(v).length`, read off the value without building the
+ * string: exact for plain strings, numbers, booleans and null; a string that holds a quote,
+ * a backslash, a control character or a surrogate counts six characters for each of its
+ * own. Stops counting once past `stop`.
+ */
+function jsonBound(v: unknown, stop: number): number {
+  if (typeof v === 'string') return 2 + (JSON_SPECIAL.test(v) ? 6 * v.length : v.length)
+  if (typeof v === 'number') return Number.isFinite(v) ? String(v).length : 4
+  if (typeof v === 'boolean') return v ? 4 : 5
+  if (v === null || typeof v !== 'object') return 4
+  let n = 2
+  if (Array.isArray(v)) {
+    for (let i = 0; i < v.length && n <= stop; i += 1) {
+      const x = v[i]
+      n += (x === undefined || typeof x === 'function' ? 4 : jsonBound(x, stop - n)) + (i ? 1 : 0)
+    }
+    return n
+  }
+  let first = true
+  for (const k of Object.keys(v)) {
+    const x = (v as Record<string, unknown>)[k]
+    if (x === undefined || typeof x === 'function') continue
+    n += jsonBound(k, stop) + 1 + jsonBound(x, stop - n) + (first ? 0 : 1)
+    first = false
+    if (n > stop) return n
+  }
+  return n
+}
+
+const runLog = (a: AgentRun): LogEntry[] => (Array.isArray(a.log) ? a.log : [])
+
+/**
+ * The stored agent list made to fit `limit` characters of JSON. A list that fits comes back
+ * as `kept`, the same object, with nothing removed: a cheap bound (`jsonBound`, no string
+ * built) says so for any list well under the limit, and only a list whose bound passes it is
+ * stringified. One that does not fit is cut to 90% of the limit, so a fit leaves room. In
+ * order, each step taken only while the list is still over: the logs of finished rows cut to
+ * their newest 10; then emptied; then the oldest finished rows that are not on a task of the
+ * plan in force removed, one at a time; then the logs of active rows halved, all of them,
+ * again and again down to one entry; then the oldest rows removed, finished before active.
+ * A cut log keeps its newest entries. `removed` are the rows the caller retires (`retire`),
+ * so the session's totals stay; the kept rows keep their order and every field but `log`.
+ */
+export function fitRows(list: AgentRun[], flow: Flow | null, limit = AGENTS_LIMIT): { kept: AgentRun[]; removed: AgentRun[] } {
+  const max = Math.max(0, num(limit) ?? AGENTS_LIMIT)
+  if (!Array.isArray(list) || jsonBound(list, max) <= max) return { kept: list, removed: [] }
+  if (JSON.stringify(list).length <= max) return { kept: list, removed: [] }
+  const target = Math.floor(max * FIT_ROOM)
+  const rows = [...list]
+  const sizes = rows.map(a => JSON.stringify(a ?? null).length)
+  const gone = new Set<number>()
+  const total = (): number => {
+    let n = 2
+    let count = 0
+    sizes.forEach((s, i) => {
+      if (gone.has(i)) return
+      n += s
+      count += 1
+    })
+    return n + Math.max(0, count - 1)
+  }
+  const fits = (): boolean => total() <= target
+  const setLog = (i: number, log: LogEntry[]): void => {
+    rows[i] = { ...rows[i]!, log }
+    sizes[i] = JSON.stringify(rows[i]).length
+  }
+  const idx = rows.map((_, i) => i)
+  const isRow = (i: number): boolean => isRecord(rows[i])
+  const isDone = (i: number): boolean => isRow(i) && !isActiveRun(rows[i]!)
+  const isLiveRow = (i: number): boolean => isRow(i) && isActiveRun(rows[i]!)
+  const endOf = (a: AgentRun): number => num(a.endedAt) ?? num(a.startedAt) ?? 0
+  const startOf = (a: AgentRun): number => num(a.startedAt) ?? 0
+  const plan = flow && !flow.isFinished && Array.isArray(flow.tasks) ? new Set(flow.tasks.map(t => norm(String(t?.title ?? ''))).filter(Boolean)) : new Set<string>()
+  const isOnPlan = (a: AgentRun): boolean => plan.has(norm(typeof a.description === 'string' ? a.description : ''))
+  // Removes rows of `pick`, oldest first by `when`, until the list fits.
+  const removeOldest = (pick: number[], when: (a: AgentRun) => number): void => {
+    const order = [...pick].sort((x, y) => when(rows[x]!) - when(rows[y]!))
+    for (const i of order) {
+      if (fits()) return
+      gone.add(i)
+    }
+  }
+
+  // 1. Finished rows' logs to their newest ten; 2. emptied.
+  for (const keep of [FINISHED_LOG, 0]) {
+    if (fits()) break
+    for (const i of idx) if (isDone(i) && runLog(rows[i]!).length > keep) setLog(i, keep ? runLog(rows[i]!).slice(-keep) : [])
+  }
+  // 3. The oldest finished rows off the plan in force.
+  if (!fits()) removeOldest(idx.filter(i => isDone(i) && !isOnPlan(rows[i]!)), endOf)
+  // 4. Active rows' logs halved, again and again, never below one entry.
+  while (!fits()) {
+    const long = idx.filter(i => !gone.has(i) && isLiveRow(i) && runLog(rows[i]!).length > 1)
+    if (!long.length) break
+    for (const i of long) {
+      const log = runLog(rows[i]!)
+      setLog(i, log.slice(-Math.ceil(log.length / 2)))
+    }
+  }
+  // 5. The oldest rows, finished before active, whatever they hold.
+  if (!fits()) removeOldest(idx.filter(i => !gone.has(i) && isDone(i)), endOf)
+  if (!fits()) removeOldest(idx.filter(i => !gone.has(i) && isLiveRow(i)), startOf)
+  if (!fits()) removeOldest(idx.filter(i => !gone.has(i)), () => 0)
+  return { kept: rows.filter((_, i) => !gone.has(i)), removed: rows.filter((_, i) => gone.has(i)) }
 }
 
 // Planned tasks no run has started yet, matched loosely on the run's description.
