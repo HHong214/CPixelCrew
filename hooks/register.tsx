@@ -2976,8 +2976,9 @@ async function clockOf($: EngineInterface, s: Snap): Promise<number> {
   return $.clock.now().catch(() => s.at)
 }
 
-// A reload (every changed option makes one) drops the timers of the environment before
-// it and `session.start` does not run again, so whatever draws next restarts the clock.
+// A reload (every changed option makes one) stops the `every` of the copy before it, and
+// `session.start` runs again only for a changed module, so this load's first draw starts
+// the clock when nothing has yet.
 function ensureTicker($: EngineInterface): void {
   if (live.ticker !== null) return
   try {
