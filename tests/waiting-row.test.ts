@@ -13,7 +13,7 @@ import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { AgentRun, MainRun } from '../types'
 import * as model from '../hooks/model'
-import { STUCK_MS, isStuck } from '../hooks/model'
+import { STUCK_MS, isLive } from '../hooks/model'
 
 const PLUGIN = 'CPixelCrew'
 const T0 = Date.parse('2026-11-13T10:00:00Z')
@@ -299,15 +299,15 @@ test('C10: isLost, a finished row is never lost, nor any row at a now that is no
   }
 })
 
-test('C10, as in 2.5.0: isStuck gives the same rows its own answers, a row waiting for approval stuck at STUCK_MS', async () => {
-  expect(isStuck(running, at + STUCK_MS - 1)).toBe(false)
-  expect(isStuck(running, at + STUCK_MS)).toBe(true)
-  expect(isStuck(approval, at + STUCK_MS - 1)).toBe(false)
-  expect(isStuck(approval, at + STUCK_MS)).toBe(true)
-  expect(isStuck(idle, at + STUCK_MS)).toBe(true)
-  expect(isStuck(finished, at + TWELVE_HOURS)).toBe(false)
-  expect(isStuck(running, Number.NaN)).toBe(false)
-  expect(isStuck(approval, Number.POSITIVE_INFINITY)).toBe(false)
+test('C10, W3: isLive gives the same rows the run\'s answers, a row waiting for approval still live at STUCK_MS', async () => {
+  expect(isLive(approval, at + STUCK_MS)).toBe(true)
+  expect(isLive(approval, at + STUCK_MS - 1)).toBe(true)
+  expect(isLive(running, at + STUCK_MS - 1)).toBe(true)
+  expect(isLive(running, at + STUCK_MS)).toBe(false)
+  expect(isLive(idle, at + STUCK_MS)).toBe(false)
+  expect(isLive(finished, at + TWELVE_HOURS)).toBe(false)
+  expect(isLive(running, Number.NaN)).toBe(true)
+  expect(isLive(approval, Number.POSITIVE_INFINITY)).toBe(true)
 })
 
 test('C10: isLost, a running row whose line is the approval line is lost at STUCK_MS', async () => {
