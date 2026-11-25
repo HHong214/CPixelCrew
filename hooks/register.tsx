@@ -446,6 +446,8 @@ const isPlanned = (f: Flow | null, description: string): boolean => {
 const wantsSteps = (type: string, description: string, f: Flow | null): boolean =>
   isLegacyCrewType(type) || (isPlanned(f, description) && !NO_STEP_TYPES.includes(type.trim().toLowerCase()))
 const isActive = (a: AgentRun): boolean => a.status === 'running' || a.status === 'waiting'
+// What a new plan leaves in the list, and a `/clear` with it: the runs still going, and a row the 15-minute rule closed, whose agent may yet come back (C13).
+const staysOnNewPlan = (a: AgentRun): boolean => isActive(a) || isMarked(a)
 const unwait = (doing: string): string => (doing.startsWith(APPROVAL) ? doing.slice(APPROVAL.length) : doing)
 const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`
 const waitingFor = (n: number): string => `Waiting for ${plural(n, 'agent')}`
@@ -737,7 +739,7 @@ function updateOf<T>($: EngineInterface, a: Atom<T>, fn: (v: T) => T): Promise<u
   return Promise.reject(new Error('not a value of the mod'))
 }
 
-// Every write of the agent list goes through here: the list as the mod can work on it
+// Every write of the agent list but the reset at a `/clear` (`startOver`, which writes it directly so that the rows that go are not retired) goes through here: the list as the mod can work on it
 // (`cleanRows`), the change, then the fit under AGENTS_LIMIT (`fitRows`, A2); the rows the fit
 // lets go are retired, so the session's totals stay.
 async function putAgents($: EngineInterface, change: (list: AgentRun[]) => AgentRun[]): Promise<AgentRun[]> {
@@ -2140,9 +2142,60 @@ function paneClosed(): void {
   frames.isPaneClosed = true
 }
 
+// The panel starts over, as a new session's does, for a `/clear`: the conversation ends and
+// the process carries on under a new id with no `session.start`, so this is the one event
+// that tells. The sums, the rows, the run and the plan of the cleared conversation go; the
+// rows a new plan keeps stay (those still active, and those the 15-minute rule closed whose
+// mark fits), and what the new conversation reads of the engine is taken again.
+// Every value is put back first, then the engine's figures are measured (the turn's cost is
+// reckoned on the new main row), then the main agent follows the rows that stayed, then the
+// run's mark is held once, on the values as they now stand. The pane need not be open; the
+// reset itself writes none of the store, the rates or the options (`refreshUsage` may remember
+// changed limits in the store, as after any measurement). Never throws.
+async function startOver($: EngineInterface): Promise<void> {
+  try {
+    const at = await stamp($)
+    const model = await $.session.model().catch(() => '')
+    await put($, mainState, () => ({ ...blankMain(at), ...(model ? { model, contextMax: windowOf(model) } : {}) }))
+    // The rows a new plan keeps stay as they are; the others go, and are not added to the retired tally.
+    const rows = await put($, agentsState, raw => {
+      const list = cleanRows(raw)
+      const kept = list.filter(staysOnNewPlan)
+      return kept.length === list.length && list === raw ? raw : kept
+    })
+    await put($, retiredState, () => blankRetired())
+    // A run that has not ended and holds a kept row stays with those rows alone and its mark afresh; else none.
+    await put($, runState, (r): Run | null => {
+      if (!r || r.endedAt !== undefined) return null
+      // A run of an older shape, with no list of ids, holds no kept row.
+      const ids = Array.isArray(r.ids) ? r.ids.filter(id => rows.some(a => a.id === id)) : []
+      if (!ids.length) return null
+      const { highKey: _highKey, quiet: _quiet, ...rest } = r
+      return { ...rest, ids, high: 0 }
+    })
+    await put($, flowState, () => null)
+    await put($, usageState, u => ({ ...blankUsage(at), limits: u.limits }))
+    await put($, viewState, v => {
+      const n = normalizeView(v)
+      if (!n.openLogs.length && !n.rowPage) return v
+      const { rowPage: _rowPage, ...rest } = n
+      return { ...rest, openLogs: [] }
+    })
+    live.turnActions = 0
+    // As `register` empties it, so nothing of the cleared conversation's last turn reaches the new main row; the hold's own timer is left with a gen that no longer matches.
+    Object.assign(streamHeld, { isHeld: false, until: 0, gen: streamHeld.gen + 1, doing: '', rows: [], since: null })
+    await refreshUsage($).catch(() => undefined)
+    await settleMain($)
+    await holdFill($, at)
+  } catch {
+    // The panel keeps what it has; the next event writes its own.
+  }
+}
+
 // A resumed session whose agents pane was open when its process went (the app restarts it
 // with `--resume`, for one at a usage limit) opens the pane again. The open is made even
 // with no surface attached yet: the engine keeps the pane and seats it when one attaches.
+// A `/clear` writes this id's entry like any start, then starts the panel over (`startOver`).
 async function onClassicSessionStart($: EngineInterface, e: In<'classic.SessionStart'>, next: NextOf<'classic.SessionStart'>) {
   const result = await next(e)
   try {
@@ -2157,6 +2210,8 @@ async function onClassicSessionStart($: EngineInterface, e: In<'classic.SessionS
   } catch {
     // Left closed; `/crew` opens it.
   }
+  // Not inside the check that the pane is open: a closed panel starts over too.
+  if (e.source === 'clear') await startOver($)
   return result
 }
 
@@ -2235,8 +2290,8 @@ async function onProgress($: EngineInterface, e: In<'tool.call'>) {
     if (isNew) {
       let gone: AgentRun[] = []
       await putAgents($, list => {
-        gone = list.filter(a => !isActive(a) && !isMarked(a))
-        return gone.length ? list.filter(a => isActive(a) || isMarked(a)) : list
+        gone = list.filter(a => !staysOnNewPlan(a))
+        return gone.length ? list.filter(staysOnNewPlan) : list
       })
       await retireRows($, gone)
     }
