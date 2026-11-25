@@ -1380,7 +1380,7 @@ async function setOption($: EngineInterface, key: string, value: string): Promis
   const next = field === undefined ? null : setSetting(before, field, value)
   if (field === undefined || next === null) return `Cannot set ${printable(key) || '(no key)'} to "${printable(value)}". ${USAGE_TEXT}`
   if (isSizeKey(field)) {
-    const why = await saveSizes($, sizesOf(next))
+    const why = await saveOneSize($, field, sizesOf(next)[field])
     return why ? `Could not set ${field}: ${why}` : `Set ${field} to ${shownSetting(next, field)}.`
   }
   if (field === HERO_KEY) {
@@ -1438,10 +1438,25 @@ async function saveSizesOnly($: EngineInterface, next: Sizes): Promise<string | 
   return null
 }
 
-// A stepper of the settings pane: the sizes as they are at the press, one step on.
+// A change of one size, by a stepper or by `/crew set`: reads the sizes the store holds at this
+// moment (normalized as `loadSizes` does; no `sizes` is the defaults), changes the one key and writes
+// that, so another session's sizes stand; this load's copy becomes what was written. A read that
+// rejects is not an empty store: the write is then made from this load's copy. Null once stored,
+// else why not. The reset does not come here: it writes the defaults whole.
+async function saveOneSize($: EngineInterface, key: keyof Sizes, value: number): Promise<string | null> {
+  let base: Sizes
+  try {
+    base = normalizeSizes(await $.store.get(SIZES_KEY))
+  } catch {
+    base = { ...sizesNow }
+  }
+  return saveSizes($, { ...base, [key]: value })
+}
+
+// A stepper of the settings pane: the value the pane shows, one step on, as that size alone.
 async function stepSize($: EngineInterface, key: keyof Sizes, direction: 1 | -1): Promise<void> {
   await loadSizes($)
-  const why = await saveSizes($, sizesOf(stepSetting(settingsNow(), key, direction)))
+  const why = await saveOneSize($, key, sizesOf(stepSetting(settingsNow(), key, direction))[key])
   if (why) $.ui.toast(`Could not set ${key}: ${why}`)
 }
 
@@ -1841,18 +1856,22 @@ async function setRowPage($: EngineInterface, n: number, first: string): Promise
 
 // `plan` opens for a reported plan and the agents on its tasks, once per flow; `any` also
 // for any other subagent, once; `never` leaves the panel to the person.
+const ANY_AGENT_KEY = 'any-agent'
 async function autoOpen($: EngineInterface, key: string, isOfPlan: boolean): Promise<void> {
   const s = settingsNow()
   if (s.autoOpen === 'never' || (!isOfPlan && s.autoOpen !== 'any')) return
-  // Every key the panel has opened for is remembered, so closing it
-  // stays the person's decision when planned and other subagents alternate.
+  // Every key the panel has opened for is remembered (the newest 20, and `any-agent` for the whole
+  // session), so closing it stays the person's decision when planned and other subagents alternate.
   // Kept escaped (`%` and `|`), so a title that holds `|` is one entry (A9).
   const kept = key.replace(/%/g, '%25').replace(/\|/g, '%7C')
   const opened = normalizeView(await read($, viewState)).autoOpenedFor.split('|')
   if (opened.includes(kept)) return
   await put($, viewState, prev => {
     const v = normalizeView(prev)
-    return { ...v, autoOpenedFor: [...v.autoOpenedFor.split('|').filter(Boolean), kept].slice(-20).join('|') }
+    const all = [...v.autoOpenedFor.split('|').filter(Boolean), kept]
+    // `any-agent` is never cut: it stays, beside the newest 20 other keys.
+    const others = all.filter(k => k !== ANY_AGENT_KEY).slice(-20)
+    return { ...v, autoOpenedFor: (all.includes(ANY_AGENT_KEY) ? [ANY_AGENT_KEY, ...others] : others).join('|') }
   })
   await openPane($).catch(() => undefined)
 }
@@ -2415,7 +2434,7 @@ async function addRun($: EngineInterface, e: In<'agent.spawn'>, agentId: string 
   await stamp($)
   const plan = await read($, flowState)
   if (plan && isPlanned(plan, description)) await autoOpen($, plan.title, true)
-  else await autoOpen($, 'any-agent', false)
+  else await autoOpen($, ANY_AGENT_KEY, false)
 }
 
 // What a person sent: typed at the prompt, through Remote Control or by the SDK host, and
