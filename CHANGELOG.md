@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.5.1 (2026-11-25)
+
+### Fixed
+
+- After `/clear` the panel kept the cleared conversation's rows and plan, and the session card mixed two conversations: Cost and Time started over while Tokens and Worked counted on. Now `/clear` starts the panel over as a new session: finished rows, the plan and the run go, and Cost, Tokens, Time and Worked count from the clear. An agent still working keeps its row, and so does a row the 15-minute rule closed, whose agent may yet come back. The sizes, compact mode, the folded Finished section, the collapsed bar and a panel you closed stay as they are.
+- With two sessions open, changing one size in one of them put the other three back to what that session had read when it started, undoing the other session's changes. A change of one size now writes that size alone, on what is stored at that moment.
+- With `autoOpen` at `any`, the panel opened itself again for a subagent outside a plan once 20 plans had been reported. It now opens for such a subagent once in a session.
+- A row kept saying `Waiting for your approval: …` for as long as the approved tool ran. The words now come off when the call is allowed and starts to run.
+- While a row waited for your approval, the bar counted its agent as finished after 15 quiet minutes and could read `Agents 1/1`, done, and a prompt sent then ended the run. A row that waits for your approval now keeps its run open for up to 12 hours.
+- A finished agent that went on after a message, without being started again through the Agent tool, showed as working with the words `Finished` until its first tool call. Its row now reads `Getting started` with a `Resumed` line in its log, and the main agent waits for it.
+- When a prompt had ended a run and one of its agents then worked again, the bar went on showing the ended run as done. The agent now joins the run under way, or starts a new one (`Agents 0/1`).
+
 ## 2.5.0 (2026-11-25)
 
 ### Fixed
