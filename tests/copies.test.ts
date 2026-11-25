@@ -423,3 +423,52 @@ test('K2: while an agent works, a value answered differently from beneath, with 
   const panes = writesOf(w, 'paneFrame', t, t + TICK_MS)
   expect(panes.some(x => holds(x.value, 'qqqq'))).toBe(true)
 })
+
+// ---------------------------------------------------------------------------
+// K2, at most one read of each value in one tick.
+
+const NINE = ['flow', 'run', 'agents', 'retired', 'main', 'usage', 'view', 'rates', 'now']
+// What the mod's values were read, tick by tick. A tick starts with its read of `main` and ends
+// with its read of `now`, the last it makes (the order `seq` gives): a frame timer that fires at
+// the same time as a tick, as one does at 5,000 ms, reads between two ticks and is not one of
+// them. Each group is told by its tick's time from T0, which is one a tick only.
+const readsByTick = (w: World, from: number, to: number) => {
+  const out = new Map<number, string[]>()
+  let open: string[] | null = null
+  for (const r of w.reads) {
+    if (r.at < from || r.at > to || isFrame(r.key)) continue
+    if (r.key === 'main') {
+      open = []
+      out.set(r.at - T0, open)
+    }
+    if (!open) continue
+    open.push(r.key)
+    if (r.key === 'now') open = null
+  }
+  return out
+}
+
+test('K2: one agent works and nothing else happens: in each of five ticks, each of the nine values is read at most once', async ($, on) => {
+  const w = await boot($, on)
+  await spawnCrew($, 1, 'Write the parser')
+  await w.clock.settle()
+  await w.clock.advance(TICK_MS)
+  const t = w.clock.now()
+  for (let i = 0; i < 5; i++) await w.clock.advance(TICK_MS)
+  const ticks = readsByTick(w, t + TICK_MS, w.clock.now())
+  // Set-up: five ticks, one second apart.
+  expect([...ticks.keys()]).toEqual([2_000, 3_000, 4_000, 5_000, 6_000])
+  const counts = [...ticks].map(([at, keys]) => [at, Object.fromEntries(NINE.map(k => [k, keys.filter(x => x === k).length]).filter(([, n]) => (n as number) > 1))])
+  expect(counts).toEqual([2_000, 3_000, 4_000, 5_000, 6_000].map(at => [at, {}]))
+})
+
+test('K2: with nothing working and nothing due, a tick reads no more values than today: at most main, agents and usage, once each', async ($, on) => {
+  const w = await boot($, on)
+  await w.clock.settle()
+  await w.clock.advance(TICK_MS)
+  const t = w.clock.now()
+  await w.clock.advance(TICK_MS)
+  const keys = [...readsByTick(w, t + 1, w.clock.now()).values()].flat()
+  expect(keys.filter(k => !['main', 'agents', 'usage'].includes(k))).toEqual([])
+  expect(keys.length).toBeLessThanOrEqual(3)
+})
