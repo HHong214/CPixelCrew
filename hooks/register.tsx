@@ -688,9 +688,12 @@ function stepRun(a: AgentRun, e: In<'turn.step'>, usage: TurnUsage | null): Agen
 // Small `$` helpers.
 
 // Reads, applies `fn` and writes, as `update` does, but writes nothing when `fn` hands back
-// the value it was given, the same object (A8). A write marks the frames out of date.
-async function put<T>($: EngineInterface, a: Atom<T>, fn: (v: T) => T): Promise<T> {
+// the value it was given, the same object (A8). A write marks the frames out of date. In a
+// tick (`epoch`, whose `$` reads afresh) a value left as it was is what the tick read of it,
+// so it goes into the read cache for the composition after it (K2).
+async function put<T>($: EngineInterface, a: Atom<T>, fn: (v: T) => T, epoch?: number): Promise<T> {
   let same: { value: T } | null = null
+  const gen0 = writeGens.get(a.ref.key) ?? 0
   try {
     const out = (await updateOf($, a, v => {
       const next = fn(v)
@@ -710,7 +713,10 @@ async function put<T>($: EngineInterface, a: Atom<T>, fn: (v: T) => T): Promise<
     return out
   } catch (err) {
     const kept = same as { value: T } | null
-    if (kept) return kept.value
+    if (kept) {
+      if (epoch !== undefined && (writeGens.get(a.ref.key) ?? 0) === gen0) readCache.set(a.ref.key, { gen: gen0, value: kept.value, epoch })
+      return kept.value
+    }
     throw err
   }
 }
@@ -1234,9 +1240,28 @@ async function settleFlow($: EngineInterface): Promise<void> {
 // change that may lower the honest fill (a re-plan, the next tick's write) and after
 // one that moves it on, so the bar never moves back while the run's agent count stays.
 // A view or count other than the one the mark was taken against starts it afresh. Never throws.
-async function holdFill($: EngineInterface, at?: number, given?: AgentRun[]): Promise<void> {
+async function holdFill($: EngineInterface, at?: number, given?: AgentRun[], epoch?: number): Promise<void> {
   try {
     const now = at ?? (await $.clock.now())
+    if (epoch !== undefined) {
+      // In a tick the plan is read through the tick's cache and the run only once, by the
+      // `put` that holds it, which reckons the hold from the run it read; the composition
+      // after the tick's hold finds both in the cache and reads neither again (K2).
+      const plan = (await cachedRead('flow', () => read($, flowState), undefined, epoch)) as Flow | null | undefined
+      const list = given ?? cleanRows(await cachedRead('agents', () => read($, agentsState), [], epoch))
+      await put(
+        $,
+        runState,
+        prev => {
+          if (!prev || plan === undefined) return prev // A plan that could not be read holds nothing, as outside a tick.
+          const view = barView(plan, prev, list, now)
+          if (!view.flow) return prev
+          return heldRun(prev, view.key, viewFill(view, prev, list, now), view.isPlan ? undefined : runQuiet(prev, list, now))
+        },
+        epoch,
+      )
+      return
+    }
     const run = await read($, runState)
     if (!run) return
     // The list the caller just read, else read here.
@@ -1881,6 +1906,7 @@ async function tick($: EngineInterface): Promise<void> {
   kickAfterLoad($)
   try {
     live.ticks += 1
+    const epoch = live.ticks
     await loadSizes($)
     const at = await $.clock.now()
     // The app's usage windows, at most every 5 minutes; not awaited, the clocks go on.
@@ -1891,17 +1917,17 @@ async function tick($: EngineInterface): Promise<void> {
     const genAgents = writeGens.get('agents') ?? 0
     const m = await read($, mainState)
     const rawAgents = await read($, agentsState)
-    seedRead('main', genMain, m)
-    seedRead('agents', genAgents, rawAgents)
+    seedRead('main', genMain, m, epoch)
+    seedRead('agents', genAgents, rawAgents, epoch)
     const list = cleanRows(rawAgents)
     // L3: a frame lost to another copy is taken back here, and written whether or not anything is due.
-    const pull: Pull = { epoch: live.ticks, isForced: await takeBackFrames($) }
+    const pull: Pull = { epoch, isForced: await takeBackFrames($) }
     const isBusy = (isRecord(m) && typeof m.turnStartedAt === 'number') || list.some(isActive)
     if (isBusy) {
       // The clocks of whatever runs: the frames are composed again with this second's time,
       // and written only when a time they show steps (B1), a mascot is due (B4, B10) or the
       // progress row is (B5).
-      await holdFill($, at, list)
+      await holdFill($, at, list, epoch)
       await streamDue($, at).catch(() => undefined)
       frames.isStale = true
       await flushFrames($, at, pull)
@@ -1912,7 +1938,7 @@ async function tick($: EngineInterface): Promise<void> {
       // (B11) and when a finished or resting picture is due to hold still (B10).
       const genUsage = writeGens.get('usage') ?? 0
       const u = await read($, usageState)
-      seedRead('usage', genUsage, u)
+      seedRead('usage', genUsage, u, epoch)
       const s = settingsNow()
       const expires = isRecord(u) && typeof u.cacheExpiresAt === 'number' ? u.cacheExpiresAt : null
       const isCacheDue = s.barItems.includes('cache') && expires !== null && frames.barClock < expires && barClockOf(at, expires) !== frames.barClock
@@ -2752,24 +2778,30 @@ type Raw = { flow?: unknown; run?: unknown; agents?: unknown; retired?: unknown;
 // Reads the bookkeeping values and composes the snap both frames are cut from, at the clock now.
 // `isBusy`: the main loop works or an agent is active: the bar's time runs to the ms and the
 // pane's times are read at the clock, not at its whole minute.
-// The read cache: what composing last read of each value, or this load last wrote of it
-// through `put` (K1), with the count of this load's own writes to it at that moment and the
-// tick count then (`epoch`). A value is read again only after `put` wrote it, or when a
-// composition the tick starts asks for it afresh (K2); a change made any other way is not
-// seen until then. `register` empties both maps, so a new load reads every value afresh (CA-3).
+// The read cache: for each value, what was last read of it or what this load last wrote of
+// it through `put` (K1), the count of this load's own writes to it at that moment (`gen`) and
+// the tick count at which the read began or the write landed (`epoch`). An entry serves
+// every composition while `gen` is the current count, so a write of this load shows at once;
+// but a composition a tick starts (and `holdFill` in a tick) uses only an entry made in that
+// tick or after, and reads the value afresh otherwise (K2), so a change made any other way
+// (an older copy still finishing its hooks) shows within a tick. `register` empties both
+// maps, so a new load reads every value afresh (CA-3).
 const readCache = new Map<string, { gen: number; value: unknown; epoch: number }>()
 const writeGens = new Map<string, number>()
 
-// `epoch`: the tick that starts the composition. An entry stored before that tick began is
-// not used, so the value is read afresh (K2); one the tick stored itself (what it read of
-// `main`, `agents` and `usage`, see `seedRead`) or this load wrote since is.
+// `epoch`: the tick that starts the composition. An entry made before that tick began is
+// not used, so the value is read afresh (K2); one the tick made itself (what it read of
+// `main`, `agents` and `usage`, see `seedRead`) or this load wrote since is. A read stamps its
+// entry with the epoch it began in: one that began before a tick, at an older moment, never
+// serves that tick.
 async function cachedRead(key: string, get: () => Promise<unknown>, fallback: unknown, epoch?: number): Promise<unknown> {
   const gen = writeGens.get(key) ?? 0
+  const began = live.ticks
   const hit = readCache.get(key)
   if (hit && hit.gen === gen && (epoch === undefined || hit.epoch >= epoch)) return hit.value
   try {
     const value = await get()
-    if ((writeGens.get(key) ?? 0) === gen) readCache.set(key, { gen, value, epoch: live.ticks })
+    if ((writeGens.get(key) ?? 0) === gen) readCache.set(key, { gen, value, epoch: began })
     return value
   } catch {
     return fallback
@@ -2779,8 +2811,8 @@ async function cachedRead(key: string, get: () => Promise<unknown>, fallback: un
 // What the tick read itself is put in the read cache, so the composition it starts uses that
 // and no value is read twice in one tick (K2); `gen` is the count of this load's writes to
 // the value before the tick read it, and a write since wins.
-function seedRead(key: string, gen: number, value: unknown): void {
-  if ((writeGens.get(key) ?? 0) === gen) readCache.set(key, { gen, value, epoch: live.ticks })
+function seedRead(key: string, gen: number, value: unknown, epoch: number): void {
+  if ((writeGens.get(key) ?? 0) === gen) readCache.set(key, { gen, value, epoch })
 }
 
 async function composeSnap($: EngineInterface, epoch?: number): Promise<{ snap: FrameSnap; clock: number; isBusy: boolean }> {
