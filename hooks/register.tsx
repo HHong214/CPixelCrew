@@ -2352,6 +2352,28 @@ async function onToolCall($: EngineInterface, e: In<'tool.call'>, next: NextOf<'
   }
 }
 
+// A call that was asked about runs at `tool.run`: the engine fires it once the call is allowed
+// and just before the tool runs, never for a refusal. The row that waited for the person's
+// answer then takes the words off at that moment, not at the tool's end: its line goes back to
+// the call's own, `waiting` becomes `running` (the main agent: `working`, while a turn runs).
+// Only a row whose line is the approval of a call with this call's line is touched; any other row, and
+// the log, stay as they are. The call itself is never held or changed.
+async function onToolRun($: EngineInterface, e: In<'tool.run'>, next: NextOf<'tool.run'>) {
+  try {
+    const at = await $.clock.now()
+    const call = activityOf(e.tool, e as unknown as Record<string, unknown>)
+    const waiting = `${APPROVAL}${call}`
+    if (e.agentId !== undefined) {
+      await updateRun($, e.agentId, a => (a.doing === waiting ? { ...a, status: a.status === 'waiting' ? 'running' : a.status, doing: call, doingSince: at } : a))
+    } else {
+      await put($, mainState, m => (m.doing === waiting ? { ...m, status: m.status === 'waiting' && m.turnStartedAt !== null ? 'working' : m.status, doing: call, doingSince: at } : m))
+    }
+  } catch {
+    // The row keeps its words; the tool still runs.
+  }
+  return next(e)
+}
+
 async function onPermissionRequest($: EngineInterface, e: In<'classic.PermissionRequest'>, next: NextOf<'classic.PermissionRequest'>) {
   try {
     const args = isRecord(e.tool_input) ? e.tool_input : {}
@@ -4153,6 +4175,7 @@ export const register: Register = (on, options) => {
   on('tool.call', { tool: 'mcp__CPixelCrew__step' }, onStep)
   on('tool.call', AGENT_TOOL_MATCH, onAgentTool)
   on('tool.call', onToolCall)
+  on('tool.run', onToolRun)
   on('classic.PermissionRequest', onPermissionRequest)
   on('agent.spawn', onAgentSpawn)
   on('prompt.submit', onPromptSubmit)
