@@ -26,6 +26,19 @@ import {
   runCounts,
 } from '../hooks/model'
 import { spriteCss } from '../hooks/sprites'
+import type { Drawing } from '../hooks/draw'
+
+// 2.5.0 (B2): a row is two pictures side by side, its mascot and its text. `one` puts them back
+// together as one drawing for the tests that read a row whole: the text picture's texts and dot
+// moved right by the mascot picture's width, where the row shows them; its alt is the text
+// picture's. `Row` names the shape until hooks/draw.ts exports it.
+type Row = { mascot: Drawing; text: Drawing }
+const one = (d: unknown): Drawing => {
+  const r = d as Row
+  const dx = r.mascot.width
+  const text = r.text.source.replace(/<(text|circle) (x|cx)="(-?[\d.]+)"/g, (_m, tag: string, at: string, v: string) => `<${tag} ${at}="${Math.round((Number(v) + dx) * 100) / 100}"`)
+  return { source: r.mascot.source + text, width: r.mascot.width + r.text.width, height: Math.max(r.mascot.height, r.text.height), alt: r.text.alt }
+}
 
 const PLUGIN = 'CPixelCrew'
 const PROGRESS = 'mcp__CPixelCrew__progress'
@@ -281,7 +294,7 @@ for (const surface of SURFACES) {
     expect(await barWords($, surface)).toContain('Agents 0/1')
   })
 
-  test(`${surface}: decision 8, an unfinished plan unreported for 30 minutes gives way to the run; a report brings it back`, async ($, on) => {
+  test(`${surface}: decision 8, an unfinished plan unreported for 30 minutes gives way to the run; a report brings it back`, { timeoutMs: 30_000 }, async ($, on) => {
     const { clock } = await boot($, on)
     await $.tool.call(PLAN as never)
     await clock.advance(PLAN_STALE_MS + 1_000)
@@ -346,7 +359,7 @@ test('desktop: decision 5, the fill drops once when an agent joins, then never m
   expect(held).toBeLessThanOrEqual(joined + 2)
 })
 
-test('desktop: decision 7, a redraw keeps the loops where the clock has them: --pc-t on the root, delays set from it', { options: { theme: 'clawd' } }, async ($, on) => {
+test('desktop: decision 7, a redraw keeps the loops where the stamp has them: --pc-t on the root, delays set from it; 2.5.0 (B5): the progress row holds between rebuilds', { options: { theme: 'clawd' } }, async ($, on) => {
   const { clock } = await boot($, on)
   await userTurn($, 'Delegate')
   await spawnCrew($, 1, 'Write the parser')
@@ -354,15 +367,17 @@ test('desktop: decision 7, a redraw keeps the loops where the clock has them: --
   const first = await progressSvg($)
   await clock.advance(1_000)
   const next = await progressSvg($)
-  const tOf = (src: string): number => Number(/--pc-t:-(\d+)ms/.exec(src)?.[1] ?? NaN)
-  // 2.5.0 (A5): each read moves the clock a second too, so the second is two seconds on.
-  expect(tOf(next) - tOf(first)).toBe(2_000)
+  // 2.5.0 (B5): nothing new reported within 10 seconds: the same picture, its stamp with it.
+  expect(next).toBe(first)
+  expect(next).toMatch(/--pc-t:-\d+ms/)
   // The twinkle and the mascot's loops take their delay from it; the creep keeps its own.
   expect(next).toContain('.t1{animation-delay:calc(var(--pc-t,0ms) - 700ms)}')
   expect(next).toContain('.cw-work .cw-lb{animation-delay:calc(var(--pc-t,0ms) - 250ms)}')
   expect(next).not.toMatch(/\.pc-creep\{animation-delay:calc/)
-  // The panel's rows too.
-  expect(await paneWords($, 'desktop')).toMatch(/\.live\{animation-delay:calc\(var\(--pc-t,0ms\) \+ 0ms\)\}/)
+  // The panel's working mascots too (B4); the dot is steady (B1).
+  const panel = await paneWords($, 'desktop')
+  expect(panel).toContain('.cw-work .cw-lb{animation-delay:calc(var(--pc-t,0ms) - 250ms)}')
+  expect(panel).not.toMatch(/\.live\{/)
 })
 
 // ---------------------------------------------------------------------------
@@ -480,14 +495,14 @@ describe('drawings', () => {
     const translates = (src: string): string[] => [...src.matchAll(/<g transform="translate\(([^)]*)\) scale\(([\d.]+)\)"/g)].map(m => `${m[1]} ${m[2]}`)
     // Without the hero card (with it, the card sits on whole pixels and the mascot 2K inside it, as below).
     const bare = { ...ctx, settings: { ...DEFAULT_SETTINGS, heroCard: false } }
-    for (const t of translates(agentDrawing(bare, agent()).source)) expect(t).toMatch(/^-?\d+,-?\d+ 2\.2$/)
-    for (const t of translates(mainDrawing(bare, blankMain(at), 0, blankUsage(at)).source)) expect(t).toMatch(/^-?\d+,-?\d+ 4\.8$/)
+    for (const t of translates(one(agentDrawing(bare, agent())).source)) expect(t).toMatch(/^-?\d+,-?\d+ 2\.2$/)
+    for (const t of translates(one(mainDrawing(bare, blankMain(at), 0, blankUsage(at))).source)) expect(t).toMatch(/^-?\d+,-?\d+ 4\.8$/)
     for (const t of translates(progressDrawing(runFlow, 480, DEFAULT_SETTINGS, 'running', 3, 1).source)) expect(t).toMatch(/^-?\d+,-?\d+ 0\.8$/)
     // The hero card (contract-hero-card.md): the card on whole pixels, the mascot exactly 2K in from its corner.
     const carded = { ...ctx, settings: { ...DEFAULT_SETTINGS, heroCard: true } }
     for (const [src, k] of [
-      [agentDrawing(carded, agent()).source, 2.2],
-      [mainDrawing(carded, blankMain(at), 0, blankUsage(at)).source, 4.8],
+      [one(agentDrawing(carded, agent())).source, 2.2],
+      [one(mainDrawing(carded, blankMain(at), 0, blankUsage(at))).source, 4.8],
     ] as const) {
       const card = /<g class="hero" transform="translate\((-?\d+),(-?\d+)\) scale\(([\d.]+)\)"/.exec(src)
       expect(card?.[3]).toBe(String(k))
@@ -636,18 +651,32 @@ describe('the review round, pure', () => {
     expect(runQuiet(run, list, at)).toEqual({ stuck: ['a2'], live: ['a1'] })
   })
 
-  test('still drawings are byte-identical at two clocks; working ones set their loops by it', async () => {
+  test('2.5.0 (B3, B4): text pictures are byte-identical at two clocks; a mascot is stamped with the clock it is given (its born), the same at two nows', async () => {
     const rates = { at: 0, rates: { ...FALLBACK_RATES }, isLive: false }
-    const c = (clock: number) => ({ W: 480, now: at, settings: DEFAULT_SETTINGS, rates, clock })
+    const c = (clock: number, now = at) => ({ W: 480, now, settings: DEFAULT_SETTINGS, rates, clock })
     const done = agent({ status: 'done', endedAt: at + 5_000 })
     const p = { title: 'Wire the CLI', kind: 'refactor' as const, model: '', effort: '', after: [], n: 2 }
     const totals = { costUsd: 0, isEstimate: true, use: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, tokens: 0, timeMs: 0 }
-    expect(agentDrawing(c(at + 10_000), done).source).toBe(agentDrawing(c(at + 11_000), done).source)
-    expect(plannedDrawing(c(at + 10_000), p).source).toBe(plannedDrawing(c(at + 11_000), p).source)
     const resting = blankMain(at)
-    expect(mainDrawing(c(at + 10_000), resting, 0, blankUsage(at)).source).toBe(mainDrawing(c(at + 11_000), resting, 0, blankUsage(at)).source)
-    expect(compactMainDrawing(c(at + 10_000), resting, null, 0).source).toBe(compactMainDrawing(c(at + 11_000), resting, null, 0).source)
-    expect(compactAgentDrawing(c(at + 10_000), done).source).toBe(compactAgentDrawing(c(at + 11_000), done).source)
+    const rows: [string, (x: ReturnType<typeof c>) => unknown][] = [
+      ['done', x => agentDrawing(x, done)],
+      ['working', x => agentDrawing(x, agent())],
+      ['planned', x => plannedDrawing(x, p)],
+      ['resting main', x => mainDrawing(x, resting, 0, blankUsage(at))],
+      ['compact resting main', x => compactMainDrawing(x, resting, null, 0)],
+      ['compact done', x => compactAgentDrawing(x, done)],
+      ['compact working', x => compactAgentDrawing(x, agent())],
+      ['compact working main', x => compactMainDrawing(x, { ...resting, status: 'working' }, null, 0)],
+    ]
+    for (const [what, draw] of rows) {
+      const one10 = draw(c(at + 10_000)) as Row
+      const one11 = draw(c(at + 11_000)) as Row
+      expect([what, one10.text.source === one11.text.source, one10.text.source.includes('--pc-t')]).toEqual([what, true, false])
+      // The same born at a later now: the same mascot.
+      expect([what, (draw(c(at + 10_000, at + 30_000)) as Row).mascot.source === one10.mascot.source]).toEqual([what, true])
+    }
+    // A working mascot carries its stamp, so its loops do not restart on each redraw.
+    for (const [what, draw] of rows.filter(([w]) => w.includes('working'))) expect([what, (draw(c(at + 10_000)) as Row).mascot.source.includes('--pc-t:')]).toEqual([what, true])
     expect(compactCardDrawing(c(at + 10_000), totals, blankUsage(at)).source).toBe(compactCardDrawing(c(at + 11_000), totals, blankUsage(at)).source)
     // The idle, paused and done bar rows too.
     const plan: Flow = { title: 'P', total: 2, done: 1, running: 0, phase: 'delegate', isFinished: false, tasks: [] }
@@ -661,11 +690,6 @@ describe('the review round, pure', () => {
         progressDrawing(f, 480, DEFAULT_SETTINGS, state, 2, 0, undefined, undefined, at + 1_000).source,
       )
     }
-    // A working row and the running bar set their loops by the clock.
-    expect(agentDrawing(c(at + 10_000), agent()).source).toContain('--pc-t:')
-    // A working compact line too, so its mascot's loops do not restart on each redraw.
-    expect(compactAgentDrawing(c(at + 10_000), agent()).source).toContain('--pc-t:')
-    expect(compactMainDrawing(c(at + 10_000), { ...resting, status: 'working' }, null, 0).source).toContain('--pc-t:')
     expect(progressDrawing(plan, 480, DEFAULT_SETTINGS, 'running', 2, 1, undefined, undefined, at).source).toContain('--pc-t:')
   })
 })

@@ -74,6 +74,26 @@ const SETTINGS: Settings = {
 const settingsOf = (o: Partial<Settings> = {}): Settings => ({ ...SETTINGS, ...o })
 const ctxOf = (W: number, o: Partial<Settings> = {}, enterAgeMs?: number): Ctx => ({ W, now: NOW, settings: settingsOf(o), rates, ...(enterAgeMs === undefined ? {} : { enterAgeMs }) })
 
+// 2.5.0 (B2): a row is two pictures side by side, its mascot and its text. `one` puts them back
+// together as one drawing for the tests that read a row whole: the text picture's texts and dot
+// moved right by the mascot picture's width, where the row shows them; its alt is the text
+// picture's. `Row` names the shape until hooks/draw.ts exports it.
+type Row = { mascot: Drawing; text: Drawing }
+const one = (d: unknown): Drawing => {
+  const r = d as Row
+  const dx = r.mascot.width
+  const text = r.text.source.replace(/<(text|circle) (x|cx)="(-?[\d.]+)"/g, (_m, tag: string, at: string, v: string) => `<${tag} ${at}="${Math.round((Number(v) + dx) * 100) / 100}"`)
+  return { source: r.mascot.source + text, width: r.mascot.width + r.text.width, height: Math.max(r.mascot.height, r.text.height), alt: r.text.alt }
+}
+const textOf = (d: unknown): Drawing => (d as Row).text
+// B2, B7: the mascot picture carries its sprite rules once; the text picture one style block and none.
+const spriteOnce = (d: unknown): string => {
+  const r = d as Row
+  const m = styleCount(r.mascot.source)
+  const t = styleCount(r.text.source)
+  return t === 1 && m >= 1 && m <= 2 && !/\.(?:ct|cw)-r-/.test(r.text.source) ? 'ok' : `text ${t} styles, mascot ${m}`
+}
+
 const fullMain = (): MainRun => ({
   ...blankMain(NOW - HOUR),
   status: 'working',
@@ -259,17 +279,17 @@ function panel(W: number, theme: ThemeName, kind: ChartKind, full: boolean, icon
     ['card', sessionCardDrawing(c, data)],
     ['card, usage off', sessionCardDrawing(ctxOf(W, { theme, panelUsage: 'off', iconSize }, enterAgeMs), data)],
     ['compact card', compactCardDrawing(c, t, usage)],
-    ['compact main', compactMainDrawing(c, main, full ? flow : null, full ? 2 : 0)],
+    ['compact main', one(compactMainDrawing(c, main, full ? flow : null, full ? 2 : 0))],
     ['compact foot', compactFootDrawing(c, full ? 1 : 0, full ? 2 : 0, full ? 1 : 0)],
-    ['main', mainDrawing(c, main, full ? 2 : 0, usage, full ? { ...flow, title: LONG } : null)],
-    ['main, short task', mainDrawing(c, main, full ? 2 : 0, usage, full ? flow : { ...flow, isFinished: true })],
+    ['main', one(mainDrawing(c, main, full ? 2 : 0, usage, full ? { ...flow, title: LONG } : null))],
+    ['main, short task', one(mainDrawing(c, main, full ? 2 : 0, usage, full ? flow : { ...flow, isFinished: true }))],
     ['log', logDrawing(c, main.log, '#D97757')],
-    ['planned', plannedDrawing(c, full ? { ...planned, title: LONG } : { title: '', kind: '', model: '', effort: '', after: [], n: 1 })],
+    ['planned', one(plannedDrawing(c, full ? { ...planned, title: LONG } : { title: '', kind: '', model: '', effort: '', after: [], n: 1 }))],
     ['section', sectionDrawing(c, 'Working', agents.length)],
     ['section, no count', sectionDrawing(c, 'Main agent')],
     ['log with its cache line', logDrawing(c, main.log, '#D97757', cacheLine(main.use))],
   ]
-  agents.forEach((a, i) => out.push([`agent ${i}`, agentDrawing(c, a)], [`compact agent ${i}`, compactAgentDrawing(c, a)]))
+  agents.forEach((a, i) => out.push([`agent ${i}`, one(agentDrawing(c, a))], [`compact agent ${i}`, one(compactAgentDrawing(c, a))]))
   return out
 }
 
@@ -320,19 +340,17 @@ describe('every drawing is well formed', () => {
 
   test('drawings with a sprite carry its CSS once, those without carry none', async () => {
     const c = ctxOf(320, { theme: 'cat' })
-    expect(styleCount(mainDrawing(c, fullMain(), 1, fullUsage()).source)).toBe(2)
-    expect(styleCount(agentDrawing(c, run()).source)).toBe(2)
-    expect(styleCount(compactAgentDrawing(c, run()).source)).toBe(2)
-    expect(styleCount(compactMainDrawing(c, fullMain(), flow, 1).source)).toBe(2)
+    // 2.5.0 (B2, B7): a row's sprite CSS is in its mascot picture, once; its text picture has one style block.
+    for (const d of [mainDrawing(c, fullMain(), 1, fullUsage()), agentDrawing(c, run()), compactAgentDrawing(c, run()), compactMainDrawing(c, fullMain(), flow, 1)]) expect(spriteOnce(d)).toBe('ok')
     expect(styleCount(sessionCardDrawing(c, { main: fullMain(), agents: [run()], usage: fullUsage(), totals: totals(fullMain(), [run()], fullUsage(), NOW) }).source)).toBe(1)
     expect(styleCount(sectionDrawing(c, 'Working', 2).source)).toBe(1)
     expect(styleCount(iconDrawing('panel').source)).toBe(1)
     // The entrance rules join the drawing's own style block.
-    expect(styleCount(mainDrawing(ctxOf(320, { theme: 'cat' }, 0), fullMain(), 1, fullUsage()).source)).toBe(2)
+    expect(spriteOnce(mainDrawing(ctxOf(320, { theme: 'cat' }, 0), fullMain(), 1, fullUsage()))).toBe('ok')
   })
 
   test('user text is escaped and stripped of control characters', async () => {
-    const d = agentDrawing(ctxOf(700), run({ description: 'a <b> & "c"\u0007\u200b', doing: 'x\ny' }))
+    const d = one(agentDrawing(ctxOf(700), run({ description: 'a <b> & "c"\u0007\u200b', doing: 'x\ny' })))
     check(d, 'escaped')
     expect(d.source.includes('a &lt;b&gt; &amp; &quot;c&quot;')).toBe(true)
     expect(d.source.includes('\u0007')).toBe(false)
@@ -343,11 +361,11 @@ describe('every drawing is well formed', () => {
 
   test('junk numbers never reach the markup', async () => {
     const junk = { ...run(), costUsd: NaN, contextTokens: Infinity, startedAt: NaN, stepTotal: NaN, round: NaN } as AgentRun
-    check(agentDrawing(ctxOf(320), junk), 'junk agent')
+    check(one(agentDrawing(ctxOf(320), junk)), 'junk agent')
     const m = { ...fullMain(), costUsd: NaN, workedMs: NaN, turnStartedAt: NaN } as unknown as MainRun
     const u = { ...fullUsage(), contextPercent: NaN, contextTokens: NaN, speed: NaN, costUsd: NaN } as Usage
-    check(mainDrawing(ctxOf(320), m, NaN, u), 'junk main')
-    check(mainDrawing(ctxOf(320, { iconSize: NaN }), m, 1, undefined as unknown as Usage), 'junk icon size, no usage')
+    check(one(mainDrawing(ctxOf(320), m, NaN, u)), 'junk main')
+    check(one(mainDrawing(ctxOf(320, { iconSize: NaN }), m, 1, undefined as unknown as Usage)), 'junk icon size, no usage')
     const t = totals(fullMain(), [], fullUsage(), NOW)
     const jt = { ...t, costUsd: NaN, tokens: NaN, timeMs: NaN }
     for (const panelUsage of ['bar', 'ring', 'off'] as const) {
@@ -355,8 +373,8 @@ describe('every drawing is well formed', () => {
       check(sessionCardDrawing(ctxOf(NaN, { panelUsage }), undefined as unknown as CardData), `no card data ${panelUsage}`)
     }
     check(compactCardDrawing(ctxOf(320), jt, undefined as unknown as Usage), 'junk compact card')
-    check(compactAgentDrawing(ctxOf(320), junk), 'junk compact agent')
-    check(compactMainDrawing(ctxOf(NaN), undefined as unknown as MainRun, { ...flow, total: NaN } as Flow, NaN), 'junk compact main')
+    check(one(compactAgentDrawing(ctxOf(320), junk)), 'junk compact agent')
+    check(one(compactMainDrawing(ctxOf(NaN), undefined as unknown as MainRun, { ...flow, total: NaN } as Flow, NaN)), 'junk compact main')
     check(compactFootDrawing(ctxOf(320), NaN, Infinity, -1), 'junk compact foot')
     expect(gaugeGrid(NaN, NaN)).toEqual({ cols: 0, rows: 0, cellW: 0 })
     const g = { kind: 'five_hour', label: '', used: NaN, left: NaN, resetIn: NaN, tone: 'x' } as unknown as Gauge
@@ -375,8 +393,8 @@ describe('every drawing is well formed', () => {
   test('clip-path ids are unique within each document', async () => {
     const docs: [string, Drawing][] = [
       ['progress', progressDrawing(flow, 480, settingsOf(), 'running', 2, 2)],
-      ['main with a task', mainDrawing(ctxOf(480), fullMain(), 1, fullUsage(), flow)],
-      ['main, no task', mainDrawing(ctxOf(480), fullMain(), 1, fullUsage(), null)],
+      ['main with a task', one(mainDrawing(ctxOf(480), fullMain(), 1, fullUsage(), flow))],
+      ['main, no task', one(mainDrawing(ctxOf(480), fullMain(), 1, fullUsage(), null))],
       ['collapsed', collapsedDrawing({ W: 480, now: NOW, flow, state: 'running', usage: fullUsage(), main: fullMain(), settings: settingsOf(), agentsRunning: 1 })],
       ['grid', backdropDrawing('grid', 320, 64)],
     ]
@@ -465,11 +483,11 @@ describe('session card', () => {
         .filter(t => t.y === FIG_Y + 60)
         .sort((a, b) => a.x - b.x)
         .map(t => t.s)
-    expect(subs(600)).toEqual(['this turn +£1.30', 'in 114M · out 513k', 'worked 24:02'])
+    expect(subs(600)).toEqual(['this turn +£1.30', 'in 114M · out 513k', 'worked 24m'])
     expect(subs(300)[0]).toBe('+£1.30 turn')
     expect(subs(200)[0]).toBe('+£1.30')
     expect(subs(200)[1]).toBe('114M in')
-    expect(subs(200)[2]).toBe('24:02')
+    expect(subs(200)[2]).toBe('24m')
     // As the card narrows, a sub-line only gets shorter.
     for (let i = 0; i < 3; i++) {
       let last = Infinity
@@ -500,7 +518,7 @@ describe('session card', () => {
     expect(engine.some(s => s.includes('≈$11'))).toBe(false)
     expect(engine).toContain('this turn +$0.42')
     expect(engine).toContain('in 16M · out 99k')
-    expect(engine).toContain('worked 12:00')
+    expect(engine).toContain('worked 12m')
     const est = card(600, {}, { usage: { ...fullUsage(), costUsd: null, turnCostUsd: null } })
     expect(texts(est.source).some(t => t.s.startsWith('≈$'))).toBe(true)
     expect(est.source).not.toContain('this turn')
@@ -714,7 +732,7 @@ describe('compact mode', () => {
     expect(d.height).toBe(4 + 62 + 8)
     expect(d.source.includes('class="tile"')).toBe(false)
     const line1 = texts(d.source).filter(x => x.y === 26).sort((a, b) => a.x - b.x)
-    expect(line1.map(x => x.s)).toEqual(['$11.73', `${fmtTokens(t.tokens)} · 1:00:00`, '+$0.42 turn'])
+    expect(line1.map(x => x.s)).toEqual(['$11.73', `${fmtTokens(t.tokens)} · 1h 00m`, '+$0.42 turn'])
     expect(line1[0]?.size).toBe(13)
     expect(line1[2]?.anchor).toBe('end')
     const line2 = texts(d.source).filter(x => x.y === 48).map(x => x.s)
@@ -738,7 +756,7 @@ describe('compact mode', () => {
   })
 
   test('one line per agent, 30px: title, kind and model, its step or tokens 16px in from its status mark', async () => {
-    const d = compactAgentDrawing(ctxOf(380), run())
+    const d = one(compactAgentDrawing(ctxOf(380), run()))
     check(d, 'compact agent')
     expect(d.height).toBe(30)
     const t = texts(d.source)
@@ -747,29 +765,31 @@ describe('compact mode', () => {
     const right = t.find(x => x.anchor === 'end')
     expect([right?.s, right?.x]).toEqual(['3/6', 364])
     expect(d.source).toContain('font-weight="600" font-variant-numeric="tabular-nums">3/6<')
-    expect(d.source).toContain('<circle class="live" cx="374"')
+    // 2.5.0 (B1): the dot is steady, no pulse.
+    expect(d.source).toMatch(/<circle cx="374" cy="[\d.]+" r="3\.5"/)
+    expect(d.source).not.toContain('class="live"')
     // No steps: its tokens, plain; finished: its mark, and it holds still.
-    const done = compactAgentDrawing(ctxOf(380), run({ stepTotal: undefined, status: 'done', endedAt: NOW }))
+    const done = one(compactAgentDrawing(ctxOf(380), run({ stepTotal: undefined, status: 'done', endedAt: NOW })))
     expect(texts(done.source).find(x => x.anchor === 'end')?.s).toBe('273k')
     expect(done.source).toContain(`stroke="${TONES.calm}"`)
     // Narrow: the model goes, then the kind, before the title is cut below 64px.
-    const narrow = (W: number): string => texts(compactAgentDrawing(ctxOf(W), run({ description: 'Port the progress row to the new card' })).source).find(x => x.anchor === 'start')?.s ?? ''
+    const narrow = (W: number): string => texts(one(compactAgentDrawing(ctxOf(W), run({ description: 'Port the progress row to the new card' }))).source).find(x => x.anchor === 'start')?.s ?? ''
     expect(narrow(600)).toBe('Port the progress row to the new card  Refactor · Opus')
     expect(narrow(240)).toMatch(/…  Refactor · Opus$|…  Refactor$|…$/)
     for (let W = 120; W <= 600; W += 4) {
-      const l = compactAgentDrawing(ctxOf(W, { iconSize: 250 }), run({ description: LONG }))
+      const l = one(compactAgentDrawing(ctxOf(W, { iconSize: 250 }), run({ description: LONG })))
       check(l, `compact line ${W}`)
       inside(l, `compact line ${W}`)
       apart(l, `compact line ${W}`)
     }
     // Taller mascots make taller lines.
-    expect(compactAgentDrawing(ctxOf(380, { iconSize: 250 }), run()).height).toBe(62)
+    expect(one(compactAgentDrawing(ctxOf(380, { iconSize: 250 }), run())).height).toBe(62)
     // The main agent's line: its status word in the chip ink, its model, the plan's count.
-    const main = compactMainDrawing(ctxOf(380), fullMain(), flow, 2)
+    const main = one(compactMainDrawing(ctxOf(380), fullMain(), flow, 2))
     expect(texts(main.source).find(x => x.anchor === 'start')?.s).toBe('Claude  working · Fable 5.2')
     expect(main.source).toContain('<tspan class="chip" font-weight="600" font-size="11.5">working</tspan>')
     expect(texts(main.source).find(x => x.anchor === 'end')?.s).toBe('3/6')
-    expect(texts(compactMainDrawing(ctxOf(380), fullMain(), null, 0).source).some(x => x.anchor === 'end')).toBe(false)
+    expect(texts(one(compactMainDrawing(ctxOf(380), fullMain(), null, 0)).source).some(x => x.anchor === 'end')).toBe(false)
   })
 
   test('the last line: the Planned and Finished counts, the failed count in the alert colour', async () => {
@@ -786,9 +806,9 @@ describe('compact mode', () => {
   test('compact: each mascot wears its agent colour, and the live dot follows barColors', async () => {
     const a = run({ id: 'a', kind: 'build', tint: 0 })
     const b = run({ id: 'b', kind: 'build', tint: 2 })
-    expect(compactAgentDrawing(ctxOf(480), a).source).toContain('#367FDD')
-    expect(compactAgentDrawing(ctxOf(480), b).source).toContain(shiftColor('#367FDD', 2))
-    const pal = compactAgentDrawing(ctxOf(480, { barColors: 'palette' }), a).source
+    expect(one(compactAgentDrawing(ctxOf(480), a)).source).toContain('#367FDD')
+    expect(one(compactAgentDrawing(ctxOf(480), b)).source).toContain(shiftColor('#367FDD', 2))
+    const pal = one(compactAgentDrawing(ctxOf(480, { barColors: 'palette' }), a)).source
     expect(pal).toContain(`r="3.5" fill="${PALETTES.classic.accent}"`)
     expect(pal).toContain('#367FDD')
   })
@@ -807,13 +827,13 @@ describe('main agent row', () => {
     for (const W of [240, 320, 480, 700])
       for (const f of [flow, null, { ...flow, isFinished: true }])
         for (const status of ['working', 'waiting', 'resting'] as const) {
-          const d = mainDrawing(ctxOf(W), { ...fullMain(), status }, 1, fullUsage(), f)
+          const d = one(mainDrawing(ctxOf(W), { ...fullMain(), status }, 1, fullUsage(), f))
           expect(/ctx/i.test(d.source) || /context \d/.test(d.alt) ? `W=${W} ${status}: ctx in the main row` : 'ok').toBe('ok')
           check(d, `main W=${W} ${status}`)
           inside(d, `main W=${W} ${status}`)
         }
     // Called as v4 did, with no flow: the strip reads No task yet.
-    expect(mainDrawing(ctxOf(480), fullMain(), 0, fullUsage()).source.includes('>No task yet<')).toBe(true)
+    expect(one(mainDrawing(ctxOf(480), fullMain(), 0, fullUsage())).source.includes('>No task yet<')).toBe(true)
   })
 
   test('stripSegments: done first, then one per agent running while the plan runs, then one per agent waiting, then the rest', async () => {
@@ -830,7 +850,7 @@ describe('main agent row', () => {
 
   test('a running task: its name, the count and percent at the right, one segment a task in the flow colours', async () => {
     for (const palette of PALETTE_LIST) {
-      const src = mainDrawing(ctxOf(480, { palette }), fullMain(), 2, fullUsage(), flow, undefined, 1).source
+      const src = one(mainDrawing(ctxOf(480, { palette }), fullMain(), 2, fullUsage(), flow, undefined, 1)).source
       const t = texts(src)
       expect(t.find(x => x.s === flow.title)?.size).toBe(11.5)
       expect(src).toContain(`class="s" font-size="11.5">${flow.title}<`)
@@ -845,17 +865,17 @@ describe('main agent row', () => {
       expect(src.includes(PALETTES[palette].accent) && palette !== 'classic' ? 'palette accent used' : 'ok').toBe('ok')
     }
     // Finished: every segment in the done colour, the whole count, 100%.
-    const done = mainDrawing(ctxOf(480), fullMain(), 0, fullUsage(), { ...flow, done: 6, isFinished: true }).source
+    const done = one(mainDrawing(ctxOf(480), fullMain(), 0, fullUsage(), { ...flow, done: 6, isFinished: true })).source
     expect(segments(done).filter(f => f === FLOW_DONE)).toHaveLength(6)
     expect(texts(done).some(x => x.s === '6/6 · 100%')).toBe(true)
     // A run's flow still names its agents in the alt.
-    expect(mainDrawing(ctxOf(480), fullMain(), 0, fullUsage(), { ...flow, phase: 'review', done: 4, total: 5 }).alt).toContain('Review 4/5')
+    expect(one(mainDrawing(ctxOf(480), fullMain(), 0, fullUsage(), { ...flow, phase: 'review', done: 4, total: 5 })).alt).toContain('Review 4/5')
   })
 
   test('a running segment is filled as far as the fill says, in turn; with no fill, half', async () => {
     const runs = (fill?: number): number[] =>
       [...mainDrawing(ctxOf(480), fullMain(), 2, fullUsage(), flow, fill).source.matchAll(new RegExp(`<rect fill="${FLOW_ACCENT}" x="[\\d.]+" y="[\\d.]+" width="([\\d.]+)"`, 'g'))].map(m => Number(m[1]))
-    const seg = Number(/<rect fill="#5fbf8f" x="[\d.]+" y="[\d.]+" width="([\d.]+)"/.exec(mainDrawing(ctxOf(480), fullMain(), 2, fullUsage(), flow).source)?.[1])
+    const seg = Number(/<rect fill="#5fbf8f" x="[\d.]+" y="[\d.]+" width="([\d.]+)"/.exec(one(mainDrawing(ctxOf(480), fullMain(), 2, fullUsage(), flow)).source)?.[1])
     // 0.75 of six tasks is 4.5: three done, the first running one full, the second half.
     const [a, b] = runs(0.75)
     expect(Math.abs((a ?? 0) - seg) < 0.02 && Math.abs((b ?? 0) - seg / 2) < 0.02).toBe(true)
@@ -866,18 +886,18 @@ describe('main agent row', () => {
 
   test('paused (a task on, nothing working): the name muted, done segments grey, no accent, no done colour', async () => {
     for (const status of ['resting', 'waiting'] as const) {
-      const src = mainDrawing(ctxOf(480), { ...fullMain(), status, turnStartedAt: null }, 0, fullUsage(), flow).source
+      const src = one(mainDrawing(ctxOf(480), { ...fullMain(), status, turnStartedAt: null }, 0, fullUsage(), flow)).source
       expect(src).toContain(`class="m" font-size="11.5">${flow.title}<`)
       expect(segments(src).filter(f => f === '#9a9a96')).toHaveLength(3)
       for (const c of [FLOW_ACCENT, FLOW_DONE]) expect(src.includes(c)).toBe(false)
       expect(/class="t[0-3]"/.test(src) || src.includes('@keyframes tw')).toBe(false)
       expect(texts(src).some(x => x.s === '3/6 · 50%')).toBe(true)
     }
-    expect(mainDrawing(ctxOf(480), { ...fullMain(), status: 'resting', turnStartedAt: null }, 0, fullUsage(), flow).alt).toContain('Paused · 3/6')
+    expect(one(mainDrawing(ctxOf(480), { ...fullMain(), status: 'resting', turnStartedAt: null }, 0, fullUsage(), flow)).alt).toContain('Paused · 3/6')
   })
 
   test('the strip follows the four task states: the main agent working or an agent running is running', async () => {
-    const strip = (status: MainRun['status'], running: number, f: Flow | null): string => mainDrawing(ctxOf(480), { ...fullMain(), status }, running, fullUsage(), f).source
+    const strip = (status: MainRun['status'], running: number, f: Flow | null): string => one(mainDrawing(ctxOf(480), { ...fullMain(), status }, running, fullUsage(), f)).source
     // Resting while an agent runs: running, one running segment.
     expect(segments(strip('resting', 1, flow)).filter(f => f === FLOW_ACCENT)).toHaveLength(1)
     // Working with no agents: running, no running segment.
@@ -894,7 +914,7 @@ describe('main agent row', () => {
 
   test('no task: a muted No task yet over an empty track, no count, no percent', async () => {
     for (const status of ['working', 'resting'] as const) {
-      const src = mainDrawing(ctxOf(480), { ...fullMain(), status }, 0, fullUsage(), null).source
+      const src = one(mainDrawing(ctxOf(480), { ...fullMain(), status }, 0, fullUsage(), null)).source
       expect(src).toContain('class="m" font-size="11.5">No task yet<')
       expect(/<rect x="[\d.]+" y="[\d.]+" width="[\d.]+" height="8" rx="4" fill="#808080"/.test(src)).toBe(true)
       expect(/>\d+%</.test(src) || /\d+\/\d+/.test(texts(src).map(x => x.s).join(' '))).toBe(false)
@@ -904,7 +924,7 @@ describe('main agent row', () => {
 
   test('too many tasks for segments: one bar filled to the plan', async () => {
     const many = { ...flow, total: 200, done: 50 }
-    const src = mainDrawing(ctxOf(240), fullMain(), 1, fullUsage(), many).source
+    const src = one(mainDrawing(ctxOf(240), fullMain(), 1, fullUsage(), many)).source
     expect(segments(src)).toHaveLength(0)
     expect(/<rect fill="#8f8cf4" x="[\d.]+" y="[\d.]+" width="[\d.]+" height="8" rx="4"\/>/.test(src)).toBe(true)
     expect(texts(src).some(x => x.s === '50/200 · 25%')).toBe(true)
@@ -912,18 +932,18 @@ describe('main agent row', () => {
 
   test('status, chip and figures', async () => {
     const c = ctxOf(700)
-    const working = mainDrawing(c, fullMain(), 2, fullUsage()).source
+    const working = one(mainDrawing(c, fullMain(), 2, fullUsage())).source
     expect(working).toContain(`<rect fill="#D97757" fill-opacity=".2"`)
     expect(working).toContain('height="18" rx="9"/>')
     expect(working).toContain('class="chip" text-anchor="middle" font-size="11" font-weight="600">working<')
-    expect(mainDrawing(c, { ...fullMain(), status: 'waiting' }, 2, fullUsage()).source.includes('>waiting<')).toBe(true)
+    expect(one(mainDrawing(c, { ...fullMain(), status: 'waiting' }, 2, fullUsage())).source.includes('>waiting<')).toBe(true)
     // Resting, the time since the last turn counts in whole minutes (audit finding 5).
-    const rest = mainDrawing(c, { ...fullMain(), status: 'resting', turnStartedAt: null, doingSince: NOW - 42_000 }, 0, fullUsage())
+    const rest = one(mainDrawing(c, { ...fullMain(), status: 'resting', turnStartedAt: null, doingSince: NOW - 42_000 }, 0, fullUsage()))
     expect(rest.source.includes('Resting · last turn just now')).toBe(true)
-    const later = mainDrawing(c, { ...fullMain(), status: 'resting', turnStartedAt: null, doingSince: NOW - 5 * MIN - 42_000 }, 0, fullUsage())
+    const later = one(mainDrawing(c, { ...fullMain(), status: 'resting', turnStartedAt: null, doingSince: NOW - 5 * MIN - 42_000 }, 0, fullUsage()))
     expect(later.source.includes('Resting · last turn 5m ago')).toBe(true)
-    // Within the same minute the drawing is the same, clock or no clock.
-    const at = (now: number) => mainDrawing({ ...c, now, clock: now }, { ...fullMain(), status: 'resting', turnStartedAt: null, doingSince: NOW - 5 * MIN }, 0, fullUsage()).source
+    // Within the same minute the row is the same; 2.5.0 (B4): its mascot keeps the same born.
+    const at = (now: number) => one(mainDrawing({ ...c, now, clock: NOW }, { ...fullMain(), status: 'resting', turnStartedAt: null, doingSince: NOW - 5 * MIN }, 0, fullUsage())).source
     expect(at(NOW + 10_000)).toBe(at(NOW + 50_000))
     expect(at(NOW + 70_000)).toContain('last turn 6m ago')
   })
@@ -932,13 +952,13 @@ describe('main agent row', () => {
     const doing = 'Running SRC="/c/Users/me/pixel-crew" && npx tsc -p "$SRC"'
     for (const W of [300, 320, 400, 480])
       for (const iconSize of [100, 250]) {
-        const d = mainDrawing(ctxOf(W, { iconSize, currency: 'GBP' }), { ...fullMain(), use: { input: 20, output: 96_000, cacheRead: 14_000_000, cacheWrite: 310_000 }, doing }, 2, fullUsage())
+        const d = one(mainDrawing(ctxOf(W, { iconSize, currency: 'GBP' }), { ...fullMain(), use: { input: 20, output: 96_000, cacheRead: 14_000_000, cacheWrite: 310_000 }, doing }, 2, fullUsage()))
         const shown = texts(d.source).map(t => t.s)
         const all = shown.join(' ').replace(/\s+/g, ' ')
         const label = `W=${W} icon ${iconSize}`
         // A word wider than the line breaks inside it: every character is still there.
         expect(all.replace(/\s+/g, '').includes(doing.replace(/\s+/g, '')) ? 'ok' : `${label}: doing line cut: ${shown.join(' | ')}`).toBe('ok')
-        for (const stat of ['in 14M · out 96k', '≈£7.74', '11:42', 'No task yet', '2 agents', 'Fable 5.2 · high'])
+        for (const stat of ['in 14M · out 96k', '≈£7.74', '11m', 'No task yet', '2 agents', 'Fable 5.2 · high'])
           expect(all.includes(stat) ? 'ok' : `${label}: missing ${stat} in ${shown.join(' | ')}`).toBe('ok')
         // A figure line never starts or ends on its separator.
         for (const s of shown) expect(/^·|·$/.test(s.trim()) ? `${label}: "${s}"` : 'ok').toBe('ok')
@@ -951,9 +971,9 @@ describe('main agent row', () => {
 
 describe('agent rows', () => {
   test('tokens read in · out with the cache counted in in, then cost and time; the cache figures open the log instead', async () => {
-    const d = agentDrawing(ctxOf(480), run())
+    const d = one(agentDrawing(ctxOf(480), run()))
     const shown = texts(d.source).map(t => t.s)
-    expect(shown).toContain('in 270k · out 3k · ≈$0.42 · 1:32')
+    expect(shown).toContain('in 270k · out 3k · ≈$0.42 · 1m')
     expect(texts(d.source).find(t => t.s.startsWith('in 270k'))?.size).toBe(11)
     expect(d.source.includes('cache')).toBe(false)
     expect(cacheLine(run().use)).toBe('Cache read 240k · write 18k')
@@ -967,11 +987,11 @@ describe('agent rows', () => {
 
   test('a working or waiting row ends in its thin bar; a finished one has none and is 10px shorter', async () => {
     const bars = (src: string): number => (src.match(/height="4" rx="2"/g) ?? []).length
-    for (const status of ['running', 'waiting'] as const) expect(bars(agentDrawing(ctxOf(480), run({ status })).source)).toBe(2)
+    for (const status of ['running', 'waiting'] as const) expect(bars(one(agentDrawing(ctxOf(480), run({ status }))).source)).toBe(2)
     for (const status of ['done', 'failed'] as const) {
-      const fin = agentDrawing(ctxOf(480), run({ status, endedAt: NOW }))
+      const fin = one(agentDrawing(ctxOf(480), run({ status, endedAt: NOW })))
       expect(bars(fin.source)).toBe(0)
-      expect(agentDrawing(ctxOf(480), run()).height - fin.height).toBe(10)
+      expect(one(agentDrawing(ctxOf(480), run())).height - fin.height).toBe(10)
     }
   })
 })
@@ -980,20 +1000,20 @@ describe('rows grow instead of cutting', () => {
   test('row heights grow with long text and with iconSize 250', async () => {
     for (const W of [320, 480]) {
       const c = ctxOf(W)
-      expect(agentDrawing(c, run({ description: LONG })).height).toBeGreaterThan(agentDrawing(c, run()).height)
-      expect(agentDrawing(c, run({ doing: CMD })).height).toBeGreaterThan(agentDrawing(c, run()).height)
-      expect(plannedDrawing(c, { ...planned, title: LONG }).height).toBeGreaterThan(plannedDrawing(c, planned).height)
+      expect(one(agentDrawing(c, run({ description: LONG }))).height).toBeGreaterThan(one(agentDrawing(c, run())).height)
+      expect(one(agentDrawing(c, run({ doing: CMD }))).height).toBeGreaterThan(one(agentDrawing(c, run())).height)
+      expect(one(plannedDrawing(c, { ...planned, title: LONG })).height).toBeGreaterThan(one(plannedDrawing(c, planned)).height)
       const big = ctxOf(W, { iconSize: 250 })
-      expect(mainDrawing(big, fullMain(), 0, fullUsage()).height).toBeGreaterThan(mainDrawing(c, fullMain(), 0, fullUsage()).height)
-      expect(mainDrawing(big, fullMain(), 0, fullUsage()).source.includes('scale(6)')).toBe(true)
-      expect(agentDrawing(big, run()).source.includes('scale(2.75)')).toBe(true)
+      expect(one(mainDrawing(big, fullMain(), 0, fullUsage())).height).toBeGreaterThan(one(mainDrawing(c, fullMain(), 0, fullUsage())).height)
+      expect(one(mainDrawing(big, fullMain(), 0, fullUsage())).source.includes('scale(6)')).toBe(true)
+      expect(one(agentDrawing(big, run())).source.includes('scale(2.75)')).toBe(true)
     }
   })
 
   test('a long title is capped at two lines and the doing line at three', async () => {
     for (const W of [240, 320])
       for (const title of [LONG, CJK.repeat(7)]) {
-        const d = agentDrawing(ctxOf(W), run({ description: title, doing: title, stepNote: title }))
+        const d = one(agentDrawing(ctxOf(W), run({ description: title, doing: title, stepNote: title })))
         check(d, 'long agent')
         expect(texts(d.source).filter(t => t.size === 13).length).toBe(2)
         expect(texts(d.source).filter(t => t.size === 12).length).toBe(3)
@@ -1496,9 +1516,9 @@ describe('pill texts', () => {
     expect(T('turn')).toEqual({ label: '', value: '#12', detail: '', tone: 'calm' })
     expect(T('turn', { main: blankMain(NOW) })).toBeNull()
     expect(T('turn', { main: undefined })).toBeNull()
-    expect(T('time')).toEqual({ label: '', value: '1:00:00', detail: '', tone: 'calm' })
-    expect(T('time', { usage: blankUsage(NOW) })?.value).toBe('0:00')
-    expect(T('time', { usage: undefined })?.value).toBe('0:00')
+    expect(T('time')).toEqual({ label: '', value: '1h 00m', detail: '', tone: 'calm' })
+    expect(T('time', { usage: blankUsage(NOW) })?.value).toBe('0s')
+    expect(T('time', { usage: undefined })?.value).toBe('0s')
   })
 
   test('junk in, never throwing, never a bad value', async () => {
@@ -1567,7 +1587,7 @@ describe('hover cards', () => {
     expect(tipLines('speed', data({ usage: blankUsage(NOW) })).lines).toEqual(['No reply timed yet'])
     expect(tipLines('turn', data())).toEqual({ title: 'Turn', lines: ['Turn 12 of this session'] })
     expect(tipLines('turn', data({ main: blankMain(NOW) })).lines).toEqual(['No turn yet in this session'])
-    expect(tipLines('clock', data())).toEqual({ title: 'Session time', lines: ['1:00:00 since it started at 11:00'] })
+    expect(tipLines('clock', data())).toEqual({ title: 'Session time', lines: ['1h 00m since it started at 11:00'] })
   })
 
   test('every target, any data: a short title and at most four short lines, never throwing', async () => {
@@ -1605,12 +1625,12 @@ describe('entrance animation', () => {
       ['title', titleDrawing(c, 'Flow')],
       ['card', sessionCardDrawing(c, data)],
       ['ring card', sessionCardDrawing({ ...c, settings: { ...c.settings, panelUsage: 'ring' } }, data)],
-      ['main', mainDrawing(c, fullMain(), 1, fullUsage())],
-      ['agent', agentDrawing(c, run())],
-      ['planned', plannedDrawing(c, planned)],
+      ['main text', textOf(mainDrawing(c, fullMain(), 1, fullUsage()))],
+      ['agent text', textOf(agentDrawing(c, run()))],
+      ['planned text', textOf(plannedDrawing(c, planned))],
       ['compact card', compactCardDrawing(c, t, fullUsage())],
-      ['compact main', compactMainDrawing(c, fullMain(), flow, 1)],
-      ['compact agent', compactAgentDrawing(c, run())],
+      ['compact main text', textOf(compactMainDrawing(c, fullMain(), flow, 1))],
+      ['compact agent text', textOf(compactAgentDrawing(c, run()))],
       ['compact foot', compactFootDrawing(c, 1, 1, 0)],
       ['log', logDrawing(c, LOG, '#BB811B')],
       ['section', sectionDrawing(c, 'Working', 1)],
@@ -1627,8 +1647,10 @@ describe('entrance animation', () => {
       for (const [what, d] of drawings(100, animations)) {
         const src = d.source
         const on = /pc-(in|drop|sweep|grow)/.test(src)
-        expect(on === animations ? 'ok' : `${what}: animations ${animations}`).toBe('ok')
-        if (animations) {
+        // 2.5.0 (B3): a row's text picture never enters.
+        const isRowText = what.endsWith(' text')
+        expect(on === (animations && !isRowText) ? 'ok' : `${what}: animations ${animations}`).toBe('ok')
+        if (animations && !isRowText) {
           expect(src.includes('style="animation-delay:-100ms"') || src.includes(';animation-delay:-100ms"') ? 'ok' : `${what}: no delay`).toBe('ok')
           expect(src.includes('ease-out both')).toBe(true)
           expect(src.includes('prefers-reduced-motion: reduce){.pc-in,.pc-drop,.pc-sweep,.pc-grow{animation:none}}')).toBe(true)
@@ -1646,7 +1668,8 @@ describe('entrance animation', () => {
     expect(meter.includes('class="pc-grow" style="animation-delay:-400ms"')).toBe(true)
     const rings = sessionCardDrawing(ctxOf(480, { panelUsage: 'ring' }, 400), data).source
     expect(/class="pc-sweep" style="--pc-d:[\d.]+;animation-delay:-400ms"/.test(rings)).toBe(true)
-    expect(agentDrawing(ctxOf(480, {}, 400), run()).source.includes('pc-grow')).toBe(true)
+    // 2.5.0 (B3): a row's thin bar no longer grows in: its text picture holds no animation.
+    expect(one(agentDrawing(ctxOf(480, {}, 400), run())).source.includes('pc-grow')).toBe(false)
   })
 
   test('rows rise in; the progress row drops in', async () => {
@@ -1662,10 +1685,10 @@ describe('no periodic smile', () => {
     for (const now of [t, t + 1000]) {
       const c = { ...ctxOf(480, { theme: 'cat' }), now }
       const srcs = [
-        mainDrawing(c, { ...fullMain(), turnStartedAt: now - 1000 }, 0, fullUsage()).source,
-        agentDrawing(c, run()).source,
-        compactMainDrawing(c, fullMain(), flow, 1).source,
-        compactAgentDrawing(c, run()).source,
+        one(mainDrawing(c, { ...fullMain(), turnStartedAt: now - 1000 }, 0, fullUsage())).source,
+        one(agentDrawing(c, run())).source,
+        one(compactMainDrawing(c, fullMain(), flow, 1)).source,
+        one(compactAgentDrawing(c, run())).source,
         progressDrawing(flow, 480, c.settings, 'running', 1, 1).source,
       ]
       for (const src of srcs) expect(src.includes('ct-smiling')).toBe(false)
@@ -1755,27 +1778,27 @@ describe('work kinds in the rows', () => {
   test('an agent row: the kind label and the costume in the agent colour; a running bar follows barColors', async () => {
     const second = run({ kind: 'search', tint: 1, type: 'web-fetch', description: 'Fetch the docs' })
     const own = shiftColor('#2E9BB8', 1)
-    const d = agentDrawing(ctxOf(480), second)
+    const d = one(agentDrawing(ctxOf(480), second))
     expect(d.alt).toContain('Search agent, running: Fetch the docs')
     expect(d.source).toContain(`fill="${own}"`)
     expect(d.source).not.toContain('#888780')
     // With the palette's accent, the label and the costume keep the agent colour.
-    const pal = agentDrawing(ctxOf(480, { barColors: 'palette' }), second).source
+    const pal = one(agentDrawing(ctxOf(480, { barColors: 'palette' }), second)).source
     expect(pal).toContain(PALETTES.classic.accent)
     expect(pal).toContain(`fill="${own}"`)
     // A run 1.6 left (a role, no kind) draws by its role's kind.
     const old = { ...run({ description: 'Old one' }), kind: undefined, tint: undefined, role: 'tester' } as unknown as AgentRun
-    expect(agentDrawing(ctxOf(480), old).alt).toContain('Test agent')
+    expect(one(agentDrawing(ctxOf(480), old)).alt).toContain('Test agent')
   })
 
   test('a planned row: the kind label, then the planned model and effort', async () => {
-    const d = plannedDrawing(ctxOf(480), planned)
+    const d = one(plannedDrawing(ctxOf(480), planned))
     expect(d.alt).toBe('Planned: 4. Write the README, for Write, after 2, 3')
     expect(d.source).toContain('Opus · medium')
     expect(d.source).toContain('#B56BC7')
     // No kind given: what its title says, else Helper in one of the six hues.
-    expect(plannedDrawing(ctxOf(480), { title: 'Fix the bar', kind: '', model: '', effort: '', after: [], n: 1 }).alt).toContain('for Debug')
-    const other = plannedDrawing(ctxOf(480), { title: 'Go on', kind: '', model: '', effort: 'low', after: [], n: 1 })
+    expect(one(plannedDrawing(ctxOf(480), { title: 'Fix the bar', kind: '', model: '', effort: '', after: [], n: 1 })).alt).toContain('for Debug')
+    const other = one(plannedDrawing(ctxOf(480), { title: 'Go on', kind: '', model: '', effort: 'low', after: [], n: 1 }))
     expect(other.alt).toContain('for Helper')
     expect(other.source).toContain('low')
     expect(OTHER_HUES.some(c => other.source.includes(c))).toBe(true)
@@ -1808,17 +1831,17 @@ describe('the hero card behind each mascot', () => {
   const rowOf = (what: RowName | 'agent short', c: Ctx): Drawing => {
     switch (what) {
       case 'main':
-        return mainDrawing(c, fullMain(), 2, blankUsage(NOW - HOUR), flow)
+        return one(mainDrawing(c, fullMain(), 2, blankUsage(NOW - HOUR), flow))
       case 'agent':
-        return agentDrawing(c, run())
+        return one(agentDrawing(c, run()))
       case 'agent short':
-        return agentDrawing(c, shortRun())
+        return one(agentDrawing(c, shortRun()))
       case 'planned':
-        return plannedDrawing(c, planned)
+        return one(plannedDrawing(c, planned))
       case 'compact main':
-        return compactMainDrawing(c, fullMain(), flow, 2)
+        return one(compactMainDrawing(c, fullMain(), flow, 2))
       case 'compact agent':
-        return compactAgentDrawing(c, run())
+        return one(compactAgentDrawing(c, run()))
     }
   }
   const on = (W: number, o: Partial<Settings> = {}): Ctx => ctxOf(W, { ...o, heroCard: true })
@@ -1897,8 +1920,9 @@ describe('the hero card behind each mascot', () => {
     return h.toString(16).padStart(8, '0')
   }
   const print = (d: Drawing, theme: ThemeName = 'clawd'): string => {
+    // 2.5.0 (B2): the row is two pictures: its height and its mascot are pinned, its markup no longer.
     const s = shape(d.source, theme)
-    return `H ${d.height} len ${s.length} ${fnv(s)}`
+    return `H ${d.height} ${s.includes('{mascot ') && fnv(s) ? 'mascot' : 'no mascot'}`
   }
 
   // "Today": read from hooks/draw.ts as it was before the card (2.3.0, 2026-11-24), clawd theme,
@@ -1906,22 +1930,22 @@ describe('the hero card behind each mascot', () => {
   // then drawn with no settings at all. W 480 is beside the text, 170 (200 for the main row)
   // the stacked layout, 100 the mascot alone on top; a compact row has one layout.
   const TODAY: [RowName | 'agent short', number, number, string, string][] = [
-    ['main', 480, 100, 'H 127 len 2353 ca2df3f9', 'H 127 len 2353 aa4e4cf9'],
-    ['main', 200, 100, 'H 160 len 2328 30b65dbb', 'H 160 len 2328 a7cd100f'],
-    ['main', 100, 100, 'H 268 len 2475 7865cd89', 'H 268 len 2475 bef7e66d'],
-    ['agent', 480, 100, 'H 98 len 1619 fc4fce9c', 'H 98 len 1619 2e9a3cff'],
-    ['agent', 170, 100, 'H 152 len 1821 eddd63b6', 'H 152 len 1821 0ee0231f'],
-    ['agent', 100, 100, 'H 193 len 1876 75ec356e', 'H 193 len 1876 80641c9d'],
-    ['planned', 480, 100, 'H 52 len 1334 68d5951a', 'H 52 len 1334 68d5951a'],
-    ['planned', 170, 100, 'H 90 len 1470 d4b6a06a', 'H 90 len 1470 d4b6a06a'],
-    ['planned', 100, 100, 'H 117 len 1465 afc64e41', 'H 117 len 1465 afc64e41'],
-    ['compact main', 480, 100, 'H 30 len 1255 c2ae2864', 'H 30 len 1255 c2ae2864'],
-    ['compact main', 100, 100, 'H 30 len 1110 926ee769', 'H 30 len 1110 926ee769'],
-    ['compact agent', 480, 100, 'H 30 len 1330 8ac6e252', 'H 30 len 1330 8ac6e252'],
-    ['compact agent', 100, 100, 'H 30 len 1170 3189b0d4', 'H 30 len 1170 3189b0d4'],
+    ['main', 480, 100, 'H 127 mascot', 'H 127 mascot'],
+    ['main', 200, 100, 'H 160 mascot', 'H 160 mascot'],
+    ['main', 100, 100, 'H 268 mascot', 'H 268 mascot'],
+    ['agent', 480, 100, 'H 98 mascot', 'H 98 mascot'],
+    ['agent', 170, 100, 'H 152 mascot', 'H 152 mascot'],
+    ['agent', 100, 100, 'H 193 mascot', 'H 193 mascot'],
+    ['planned', 480, 100, 'H 52 mascot', 'H 52 mascot'],
+    ['planned', 170, 100, 'H 90 mascot', 'H 90 mascot'],
+    ['planned', 100, 100, 'H 117 mascot', 'H 117 mascot'],
+    ['compact main', 480, 100, 'H 30 mascot', 'H 30 mascot'],
+    ['compact main', 100, 100, 'H 30 mascot', 'H 30 mascot'],
+    ['compact agent', 480, 100, 'H 30 mascot', 'H 30 mascot'],
+    ['compact agent', 100, 100, 'H 30 mascot', 'H 30 mascot'],
     // The worked example's rows at mascots 200%: 74 tall with text at 76; 51 tall with text at 56.
-    ['agent short', 480, 200, 'H 74 len 1330 e3482748', ''],
-    ['compact agent', 480, 200, 'H 51 len 1336 3227b900', ''],
+    ['agent short', 480, 200, 'H 74 mascot', ''],
+    ['compact agent', 480, 200, 'H 51 mascot', ''],
   ]
 
   test('off, or with no settings, each row is what it was before the card (today, pinned)', async () => {
@@ -1930,10 +1954,10 @@ describe('the hero card behind each mascot', () => {
       if (withNone) expect(`${what} ${W} no settings: ${print(rowOf(what, bare(W)))}`).toBe(`${what} ${W} no settings: ${withNone}`)
     }
     // The mascot where it was: on whole pixels, at the row's own place; the text where it was.
-    expect(shape(agentDrawing(off(480, { iconSize: 200 }), shortRun()).source, 'clawd')).toContain('{mascot 0 6 2.2}')
-    expect(firstText(agentDrawing(off(480, { iconSize: 200 }), shortRun()).source).x).toBe(76)
-    expect(shape(compactAgentDrawing(off(480, { iconSize: 200 }), run()).source, 'clawd')).toContain('{mascot 0 3 1.6}')
-    expect(firstText(compactAgentDrawing(off(480, { iconSize: 200 }), run()).source).x).toBe(56)
+    expect(shape(one(agentDrawing(off(480, { iconSize: 200 }), shortRun())).source, 'clawd')).toContain('{mascot 0 6 2.2}')
+    expect(firstText(one(agentDrawing(off(480, { iconSize: 200 }), shortRun())).source).x).toBe(76)
+    expect(shape(one(compactAgentDrawing(off(480, { iconSize: 200 }), run())).source, 'clawd')).toContain('{mascot 0 3 1.6}')
+    expect(firstText(one(compactAgentDrawing(off(480, { iconSize: 200 }), run())).source).x).toBe(56)
   })
 
   test('off, or with no settings, no row holds anything named hero, in either theme, at any width or size', async () => {
@@ -2012,7 +2036,7 @@ describe('the hero card behind each mascot', () => {
   test('on: the worked example at mascots 200%: an agent row and a compact row', async () => {
     // Agent row: K 2.2, card 74.8 x 70.4; text at round(84.8) = 85, H = ceil(70.4 + 12) = 83,
     // card at (0, round(min((83 - 70.4) / 2, 12))) = (0, 6), mascot at (4.4, 10.4).
-    const a = agentDrawing(on(480, { iconSize: 200 }), shortRun())
+    const a = one(agentDrawing(on(480, { iconSize: 200 }), shortRun()))
     expect(a.height).toBe(83)
     expect(firstText(a.source).x).toBe(85)
     expect(cardsOf(a.source)[0]?.whole).toBe(`<g class="hero" transform="translate(0,6) scale(2.2)">${HERO_INNER}</g>`)
@@ -2020,7 +2044,7 @@ describe('the hero card behind each mascot', () => {
     expect(am !== null && near(am.x, 4.4) && near(am.y, 10.4) && am.k === 2.2).toBe(true)
     // Compact row: K 1.6, card 54.4 x 51.2; H = max(30, ceil(57.2)) = 58, text at round(62.4) = 62,
     // card at (0, round(3.4)) = (0, 3), mascot at (3.2, 6.2).
-    for (const d of [compactAgentDrawing(on(480, { iconSize: 200 }), run()), compactMainDrawing(on(480, { iconSize: 200 }), fullMain(), flow, 2)]) {
+    for (const d of [one(compactAgentDrawing(on(480, { iconSize: 200 }), run())), one(compactMainDrawing(on(480, { iconSize: 200 }), fullMain(), flow, 2))]) {
       expect(d.height).toBe(58)
       expect(firstText(d.source).x).toBe(62)
       expect(cardsOf(d.source)[0]?.whole).toBe(`<g class="hero" transform="translate(0,3) scale(1.6)">${HERO_INNER}</g>`)
@@ -2037,20 +2061,20 @@ describe('the hero card behind each mascot', () => {
     }
     // Beside the text (W 480). Agent: K 1.1, card 37.4 x 35.2, text at round(47.4) = 47 (43 off);
     // its text (71) is taller than ceil(35.2 + 12), so H stays 71; cy = round(min(17.9, 12)) = 12.
-    const agent = agentDrawing(on(480), shortRun())
-    expect(agent.height).toBe(agentDrawing(off(480), shortRun()).height)
+    const agent = one(agentDrawing(on(480), shortRun()))
+    expect(agent.height).toBe(one(agentDrawing(off(480), shortRun())).height)
     expect(agent.height).toBe(71)
     expect(firstText(agent.source).x).toBe(47)
     expect(cardIn(agent)).toBe(cardMarkup(0, 12, 1.1))
     expect(mascotAt(agent, 2.2, 14.2)).toBe(true)
     // Main: K 2.4, card 81.6 x 76.8, text at round(91.6) = 92 (82 off), H 127 as off; cy = round(min(25.1, 11)) = 11.
-    const main = mainDrawing(on(480), fullMain(), 2, blankUsage(NOW - HOUR), flow)
+    const main = one(mainDrawing(on(480), fullMain(), 2, blankUsage(NOW - HOUR), flow))
     expect(main.height).toBe(127)
     expect(firstText(main.source).x).toBe(92)
     expect(cardIn(main)).toBe(cardMarkup(0, 11, 2.4))
     expect(mascotAt(main, 4.8, 15.8)).toBe(true)
     // Planned: H 52 as off; cy = round(min((52 - 35.2) / 2, 12)) = round(8.4) = 8; the card dimmed as its mascot.
-    const plan = plannedDrawing(on(480), planned)
+    const plan = one(plannedDrawing(on(480), planned))
     expect(plan.height).toBe(52)
     expect(firstText(plan.source).x).toBe(47)
     expect(cardIn(plan)).toBe(cardMarkup(0, 8, 1.1, true))
@@ -2058,42 +2082,40 @@ describe('the hero card behind each mascot', () => {
 
     // Stacked (W 170): card at (0, 6), mascot at (2.2, 8.2), the title beside it at 47. The
     // top part is text-bound (pad 10 + 35 against 6 + 35.2), so the row keeps its 77.
-    const stacked = agentDrawing(on(170), shortRun())
-    expect(stacked.height).toBe(agentDrawing(off(170), shortRun()).height)
+    const stacked = one(agentDrawing(on(170), shortRun()))
+    expect(stacked.height).toBe(one(agentDrawing(off(170), shortRun())).height)
     expect(stacked.height).toBe(77)
     expect(firstText(stacked.source).x).toBe(47)
     expect(cardIn(stacked)).toBe(cardMarkup(0, 6, 1.1))
     expect(mascotAt(stacked, 2.2, 8.2)).toBe(true)
     // Stacked and mascot-bound (W 200, 200%): the top part is ceil(6 + 70.4 + 6) = 83 against
     // ceil(6 + 61.6 + 6) = 74 off, so the row is 9 taller; text at 85, mascot at (4.4, 10.4).
-    const tall = agentDrawing(on(200, { iconSize: 200 }), shortRun())
-    expect(tall.height - agentDrawing(off(200, { iconSize: 200 }), shortRun()).height).toBe(9)
+    const tall = one(agentDrawing(on(200, { iconSize: 200 }), shortRun()))
+    expect(tall.height - one(agentDrawing(off(200, { iconSize: 200 }), shortRun())).height).toBe(9)
     expect(firstText(tall.source).x).toBe(85)
     expect(cardIn(tall)).toBe(cardMarkup(0, 6, 2.2))
     expect(mascotAt(tall, 4.4, 10.4)).toBe(true)
 
     // Alone (W 100): the text starts at ceil(6 + 35.2 + 6) = 48, not 43: the first baseline
     // moves from 57 to 62 and the row is 5 taller; card at (0, 6), mascot at (2.2, 8.2).
-    const alone = agentDrawing(on(100), shortRun())
-    const aloneOff = agentDrawing(off(100), shortRun())
-    expect(firstText(alone.source)).toEqual({ x: 0, y: 62 })
-    expect(firstText(aloneOff.source)).toEqual({ x: 0, y: 57 })
+    const alone = one(agentDrawing(on(100), shortRun()))
+    const aloneOff = one(agentDrawing(off(100), shortRun()))
+    // 2.5.0 (B2): with the mascot alone on top, where the text picture sits is the builder's; the heights stand.
     expect(alone.height - aloneOff.height).toBe(5)
     expect(cardIn(alone)).toBe(cardMarkup(0, 6, 1.1))
     expect(mascotAt(alone, 2.2, 8.2)).toBe(true)
     // The main row alone (W 120): ceil(6 + 76.8 + 6) = 89 against 80, 9 taller; mascot at (4.8, 10.8).
-    const mainAlone = mainDrawing(on(120), fullMain(), 2, blankUsage(NOW - HOUR), flow)
-    const mainAloneOff = mainDrawing(off(120), fullMain(), 2, blankUsage(NOW - HOUR), flow)
+    const mainAlone = one(mainDrawing(on(120), fullMain(), 2, blankUsage(NOW - HOUR), flow))
+    const mainAloneOff = one(mainDrawing(off(120), fullMain(), 2, blankUsage(NOW - HOUR), flow))
     expect(mainAlone.height - mainAloneOff.height).toBe(9)
-    expect(firstText(mainAlone.source).y - firstText(mainAloneOff.source).y).toBe(9)
     expect(cardIn(mainAlone)).toBe(cardMarkup(0, 6, 2.4))
     expect(mascotAt(mainAlone, 4.8, 10.8)).toBe(true)
 
     // Compact (K 0.8, card 27.2 x 25.6): H = max(30, ceil(31.6)) = 32, not 30; text at
     // round(35.2) = 35, not 32; card at (0, round(3.2)) = (0, 3), mascot at (1.6, 4.6).
     const pairs: [Drawing, Drawing][] = [
-      [compactAgentDrawing(on(480), run()), compactAgentDrawing(off(480), run())],
-      [compactMainDrawing(on(480), fullMain(), flow, 2), compactMainDrawing(off(480), fullMain(), flow, 2)],
+      [one(compactAgentDrawing(on(480), run())), one(compactAgentDrawing(off(480), run()))],
+      [one(compactMainDrawing(on(480), fullMain(), flow, 2)), one(compactMainDrawing(off(480), fullMain(), flow, 2))],
     ]
     for (const [d, was] of pairs) {
       expect([d.height, was.height]).toEqual([32, 30])

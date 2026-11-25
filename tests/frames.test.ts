@@ -425,7 +425,7 @@ test('A-d1: a live row that took 400 log entries holds 200 at most, and once fin
 // ---------------------------------------------------------------------------
 // A-d2: a row whose end was missed.
 
-test('A-d2: an active row its agent list no longer shows is failed after STUCK_MS and the next sync; then 60 s pass with no write', { options: { barCache: false }, timeoutMs: 30_000 }, async ($, on) => {
+test('A-d2: an active row its agent list no longer shows is failed after STUCK_MS and the next sync; then 60 s pass with no write but the pane frames of B10 and B11', { options: { barCache: false }, timeoutMs: 30_000 }, async ($, on) => {
   const w = await boot($, on)
   await userTurn($)
   await spawnCrew($, 1, 'Write the parser')
@@ -438,7 +438,9 @@ test('A-d2: an active row its agent list no longer shows is failed after STUCK_M
   expect(row?.log.at(-1)?.text).toContain('Stopped: no longer listed')
   const t = w.clock.now()
   await w.clock.advance(60_000)
-  expect(w.writes.filter(x => x.at > t).map(x => x.key)).toEqual([])
+  // 2.5.0: the failed row's mascot holds still a minute on (B10), and the idle pane counts on once a minute (B11).
+  expect(w.writes.filter(x => x.at > t && x.key !== 'paneFrame').map(x => x.key)).toEqual([])
+  expect(w.writes.filter(x => x.at > t && x.key === 'paneFrame').length).toBeLessThanOrEqual(2)
 })
 
 test('A-d2: a row the agent list still shows as running is left alone, quiet or not', { timeoutMs: 30_000 }, async ($, on) => {
@@ -454,7 +456,7 @@ test('A-d2: a row the agent list still shows as running is left alone, quiet or 
 // ---------------------------------------------------------------------------
 // A-d4 and A7: idle.
 
-test('A-d4: with the cache pill on and 50 minutes left, a minute passes with no pane frame, one bar frame at most, no invalidate and no now', { options: ALL_ITEMS, timeoutMs: 60_000 }, async ($, on) => {
+test('A-d4: with the cache pill on and 50 minutes left, a minute passes with one pane frame at most (B11), one bar frame at most, no invalidate and no now', { options: ALL_ITEMS, timeoutMs: 60_000 }, async ($, on) => {
   const w = await boot($, on)
   const p = await pane($)
   const b = await band($)
@@ -467,7 +469,8 @@ test('A-d4: with the cache pill on and 50 minutes left, a minute passes with no 
   const after = (key: string): number => w.writes.filter(x => x.key === key && x.at > t).length
   expect(w.invalidations.filter(at => at > t)).toEqual([])
   expect(after('now')).toBe(0)
-  expect(after('paneFrame')).toBe(0)
+  // 2.5.0 (B11): the idle pane counts on, once a minute.
+  expect(after('paneFrame')).toBeLessThanOrEqual(1)
   expect(after('barFrame')).toBeLessThanOrEqual(1)
   expect(w.writes.some(x => x.key === 'barFrame')).toBe(true)
   // A7: whole minutes until five are left.
@@ -476,7 +479,7 @@ test('A-d4: with the cache pill on and 50 minutes left, a minute passes with no 
   await b.unmount()
 })
 
-test('A7: idle with nothing on the bar to count down, a minute passes with no write at all and no invalidate', { options: { barCache: false } }, async ($, on) => {
+test('A7: idle with nothing on the bar to count down, a minute passes with no write but one pane frame at most (B10) and no invalidate', { options: { barCache: false } }, async ($, on) => {
   const w = await boot($, on)
   const b = await band($)
   await userTurn($)
@@ -486,7 +489,9 @@ test('A7: idle with nothing on the bar to count down, a minute passes with no wr
   const t = w.clock.now()
   await w.clock.advance(60_000)
   expect(w.invalidations.filter(at => at > t)).toEqual([])
-  expect(w.writes.filter(x => x.at > t && x.key !== 'barFrame').map(x => x.key)).toEqual([])
+  // 2.5.0 (B10): one pane frame, as the resting mascot holds still a minute after the turn.
+  expect(w.writes.filter(x => x.at > t && x.key !== 'barFrame' && x.key !== 'paneFrame').map(x => x.key)).toEqual([])
+  expect(w.writes.filter(x => x.at > t && x.key === 'paneFrame').length).toBeLessThanOrEqual(1)
   await b.unmount()
 })
 
