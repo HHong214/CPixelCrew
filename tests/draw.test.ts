@@ -78,13 +78,17 @@ const ctxOf = (W: number, o: Partial<Settings> = {}, enterAgeMs?: number): Ctx =
 // together as one drawing for the tests that read a row whole: the text picture's texts and dot
 // moved right by the mascot picture's width, where the row shows them; its alt is the text
 // picture's. `Row` names the shape until hooks/draw.ts exports it.
-type Row = { mascot: Drawing; text: Drawing }
+// A stacked row (`over: true`) is its text picture, as wide and tall as the row, with the mascot
+// picture laid over its top-left corner: its texts are where the text picture has them.
+type Row = { mascot: Drawing; text: Drawing; over?: boolean }
 const partsOf = new WeakMap<Drawing, Row>()
 const one = (d: unknown): Drawing => {
   const r = d as Row
-  const dx = r.mascot.width
+  const dx = r.over ? 0 : r.mascot.width
   const text = r.text.source.replace(/<(text|circle) (x|cx)="(-?[\d.]+)"/g, (_m, tag: string, at: string, v: string) => `<${tag} ${at}="${Math.round((Number(v) + dx) * 100) / 100}"`)
-  const whole = { source: r.mascot.source + text, width: r.mascot.width + r.text.width, height: Math.max(r.mascot.height, r.text.height), alt: r.text.alt }
+  const whole = r.over
+    ? { source: r.mascot.source + text, width: r.text.width, height: r.text.height, alt: r.text.alt }
+    : { source: r.mascot.source + text, width: r.mascot.width + r.text.width, height: Math.max(r.mascot.height, r.text.height), alt: r.text.alt }
   // `check` reads each picture of a joined row by itself: a picture's header states its own size.
   partsOf.set(whole, r)
   return whole
@@ -253,6 +257,13 @@ function apart(d: Drawing, what: string): void {
   }
 }
 
+// A stacked row: no text of its text picture lies in the corner its mascot picture covers.
+function clearOfMascot(d: Drawing, what: string): void {
+  const r = partsOf.get(d)
+  if (!r?.over) return
+  for (const t of texts(r.text.source)) expect(t.left >= r.mascot.width - 0.5 || t.y - t.size * 0.75 >= r.mascot.height - 0.5 ? 'ok' : `${what}: "${t.s}" under the mascot`).toBe('ok')
+}
+
 function check(d: Drawing | null, what: string): void {
   if (!d) return
   // A row joined by `one`: each of its pictures is checked by itself, against its own size.
@@ -310,8 +321,10 @@ describe('every drawing is well formed', () => {
               for (const [what, d] of panel(W, theme, kind, full, iconSize, iconSize === 100 ? 120 : undefined)) {
                 const label = `${what} W=${W} ${theme} ${kind} ${full ? 'full' : 'empty'} icon ${iconSize}`
                 check(d, label)
+                // A row's width is W: side by side its two pictures', stacked its text picture's.
                 expect(d.width).toBe(W)
                 inside(d, label)
+                clearOfMascot(d, label)
               }
   })
 
@@ -1117,6 +1130,28 @@ describe('inline log', () => {
 describe('progress row', () => {
   const xOf = (src: string, re: RegExp): number => Number(re.exec(src)?.[1])
   const FAINT = /opacity="0\.45"|width="1\.7"/
+  // B6: each dot of the dither (2px, or 1.7px in the faint layer) with what it takes from the groups
+  // around it: its twinkle group (t0 to t3), its fill and its opacity (its own, else its groups'), and its own class and style.
+  type Dot = { x: number; w: number; group: string; fill: string; opacity: string; cls: string; style: string }
+  const dotsOf = (src: string): Dot[] => {
+    const stack: Record<string, string>[] = []
+    const out: Dot[] = []
+    for (const m of src.matchAll(/<(\/?)(\w+)((?:\s+[\w:-]+="[^"]*")*)\s*(\/?)>/g)) {
+      if (m[1]) {
+        if (m[2] === 'g') stack.pop()
+        continue
+      }
+      const a: Record<string, string> = Object.fromEntries([...(m[3] ?? '').matchAll(/([\w:-]+)="([^"]*)"/g)].map(x => [x[1] ?? '', x[2] ?? '']))
+      if (m[2] === 'g' && !m[4]) stack.push(a)
+      if (m[2] !== 'rect' || !(a.width === '2' || a.width === '1.7') || a.height !== a.width) continue
+      const up = (k: string): string => [...stack].reverse().find(g => g[k] !== undefined)?.[k] ?? ''
+      const group = [...stack].reverse().map(g => /(?:^|\s)(t[0-3])(?:\s|$)/.exec(g.class ?? '')?.[1]).find(Boolean) ?? ''
+      out.push({ x: Number(a.x), w: Number(a.width), group, fill: a.fill ?? up('fill'), opacity: a.opacity ?? up('opacity'), cls: a.class ?? '', style: a.style ?? '' })
+    }
+    return out
+  }
+  // The elements that carry a twinkle class.
+  const twinkleCarriers = (src: string): string[] => [...src.matchAll(/<(\w+)\b[^>]*\bclass="([^"]*)"/g)].filter(m => /(?:^|\s)t[0-3](?:\s|$)/.test(m[2] ?? '')).map(m => m[1] ?? '')
   const progress = (f: Flow | null, state: TaskState, o: { W?: number; s?: Partial<Settings>; crew?: number; running?: number; age?: number } = {}): string =>
     progressDrawing(f, o.W ?? 700, settingsOf(o.s), state, o.crew ?? 0, o.running ?? 0, o.age).source
 
@@ -1160,7 +1195,8 @@ describe('progress row', () => {
       const running = progress(flow, 'running', { s: { palette }, crew: 2, running: 2 })
       const done = progress({ ...flow, done: 6, isFinished: true }, 'done', { s: { palette } })
       expect(running.includes(`<circle cx="5" cy="12" r="4" fill="${FLOW_ACCENT}"/>`)).toBe(true)
-      expect(running.includes(`<g fill="${FLOW_ACCENT}">`) && running.includes(`<g fill="${FLOW_ACCENT}" opacity="0.45">`)).toBe(true)
+      // B6: the dots, in the accent, and the faint layer's at 0.45, whatever groups they sit in.
+      expect(dotsOf(running).some(d => d.w === 2 && d.fill === FLOW_ACCENT && !d.opacity) && dotsOf(running).some(d => d.w === 1.7 && d.fill === FLOW_ACCENT && d.opacity === '0.45')).toBe(true)
       expect(new RegExp(`<rect x="\\d+" width="\\d+" height="16" rx="8" fill="${FLOW_ACCENT}"/>`).test(running)).toBe(true)
       expect(running.includes('>Tasks 3/6<') && running.includes('>50%<')).toBe(true)
       expect(done.includes(`<circle cx="5" cy="12" r="4" fill="${FLOW_DONE}"/>`) && done.includes(`<g fill="${FLOW_DONE}">`)).toBe(true)
@@ -1172,8 +1208,9 @@ describe('progress row', () => {
   })
 
   test('running: the faint layer reaches min(total, done + agents really running) / total, never from flow.running', async () => {
-    const faintEnd = (src: string): number => Math.max(0, ...[...src.matchAll(/<rect class="t[0-3]" x="(\d+)" y="\d+" width="1\.7"/g)].map(m => Number(m[1])))
-    const fillEnd = (src: string): number => Math.max(0, ...[...src.matchAll(/<rect class="t[0-3]" x="(\d+)" y="\d+" width="2"/g)].map(m => Number(m[1])))
+    // B6: a twinkling dot is one in a twinkle group.
+    const faintEnd = (src: string): number => Math.max(0, ...dotsOf(src).filter(d => d.group && d.w === 1.7).map(d => d.x))
+    const fillEnd = (src: string): number => Math.max(0, ...dotsOf(src).filter(d => d.group && d.w === 2).map(d => d.x))
     const track = (src: string): number => Number(/<rect class="ftk" width="(\d+)"/.exec(src)?.[1])
     // With a stale flow.running and no agent running: no faint layer at all.
     expect(FAINT.test(progress({ ...flow, running: 3 }, 'running', { running: 0 }))).toBe(false)
@@ -1233,13 +1270,15 @@ describe('progress row', () => {
     expect(done.includes('@keyframes tw{0%,100%{opacity:1}50%{opacity:0.8}}')).toBe(true)
     for (const src of [running, done]) {
       expect(src.includes('@media (prefers-reduced-motion: reduce){.t0,.t1,.t2,.t3{animation:none}}')).toBe(true)
-      for (const k of [0, 1, 2, 3]) expect(src.includes(`<rect class="t${k}" `), `t${k}`).toBe(true)
-      // Only the dots carry the twinkle classes: nothing else is a t0-t3 element.
-      expect([...src.matchAll(/<(\w+) class="t[0-3]"/g)].every(m => m[1] === 'rect')).toBe(true)
+      // B6: dots twinkle in each of the four groups; only groups carry the classes, four at most, and no dot does.
+      for (const k of [0, 1, 2, 3]) expect(dotsOf(src).some(d => d.group === `t${k}`), `t${k}`).toBe(true)
+      const carriers = twinkleCarriers(src)
+      expect(carriers.every(tag => tag === 'g') && carriers.length <= 4).toBe(true)
+      expect(dotsOf(src).some(d => /(?:^|\s)t[0-3](?:\s|$)/.test(d.cls))).toBe(false)
     }
     // The twinkle does not follow the animations setting (that is for entrances), nor an entrance in progress.
     const still = progress(flow, 'running', { s: { animations: false }, crew: 2, running: 2 })
-    expect(still.includes('.t0,.t1,.t2,.t3{animation:tw 2.2s') && /<rect class="t[0-3]"/.test(still)).toBe(true)
+    expect(still.includes('.t0,.t1,.t2,.t3{animation:tw 2.2s') && dotsOf(still).some(d => d.group)).toBe(true)
     const entering = progress(flow, 'running', { crew: 2, running: 2, age: 100 })
     expect(entering.includes('.t0,.t1,.t2,.t3{animation:tw 2.2s')).toBe(true)
     // The entrance sits on wrapper groups, never on a dot: a dot's own element has no style or pc- class.
@@ -1248,8 +1287,9 @@ describe('progress row', () => {
 
   test('the dither matches savvy-progress: cells of 3px, 2px dots, a faint layer for handed-out work, ticks on the rest', async () => {
     const src = progress(flow, 'running', { crew: 2, running: 2 })
-    expect(/<rect class="t[0-3]" x="\d+" y="\d+" width="2" height="2"\/>/.test(src)).toBe(true)
-    expect(/<g fill="#8f8cf4" opacity="0\.45"><rect class="t[0-3]" x="\d+" y="\d+" width="1\.7" height="1\.7"\/>/.test(src)).toBe(true)
+    // B6: the 2px dots and the faint layer's 1.7px ones, each in a twinkle group.
+    expect(dotsOf(src).some(d => d.w === 2 && d.group !== '')).toBe(true)
+    expect(dotsOf(src).some(d => d.w === 1.7 && d.group !== '' && d.fill === '#8f8cf4' && d.opacity === '0.45')).toBe(true)
     expect(/<g class="tk"><rect x="\d+" y="4" width="1\.5" height="8" rx="0\.75"\/>/.test(src)).toBe(true)
     expect(src.includes('<clipPath id="pc-flow">') && src.includes('clip-path="url(#pc-flow)"')).toBe(true)
   })
@@ -2096,6 +2136,10 @@ describe('the hero card behind each mascot', () => {
     expect(stacked.height).toBe(one(agentDrawing(off(170), shortRun())).height)
     expect(stacked.height).toBe(77)
     expect(firstText(stacked.source).x).toBe(47)
+    // Ruling of 2026-11-25: a stacked row lays its mascot over its text picture; a row beside its text does not.
+    expect((agentDrawing(on(170), shortRun()) as unknown as Row).over).toBe(true)
+    expect((agentDrawing(on(480), shortRun()) as unknown as Row).over).toBeFalsy()
+    clearOfMascot(stacked, 'stacked')
     expect(cardIn(stacked)).toBe(cardMarkup(0, 6, 1.1))
     expect(mascotAt(stacked, 2.2, 8.2)).toBe(true)
     // Stacked and mascot-bound (W 200, 200%): the top part is ceil(6 + 70.4 + 6) = 83 against
@@ -2103,6 +2147,8 @@ describe('the hero card behind each mascot', () => {
     const tall = one(agentDrawing(on(200, { iconSize: 200 }), shortRun()))
     expect(tall.height - one(agentDrawing(off(200, { iconSize: 200 }), shortRun())).height).toBe(9)
     expect(firstText(tall.source).x).toBe(85)
+    expect((agentDrawing(on(200, { iconSize: 200 }), shortRun()) as unknown as Row).over).toBe(true)
+    clearOfMascot(tall, 'tall')
     expect(cardIn(tall)).toBe(cardMarkup(0, 6, 2.2))
     expect(mascotAt(tall, 4.4, 10.4)).toBe(true)
 
