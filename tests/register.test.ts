@@ -101,6 +101,7 @@ type BootOptions = { stored?: Record<string, unknown>; fx?: string; isBroken?: b
 async function boot($: Engine, on: On, o: BootOptions = {}): Promise<Boot> {
   const stored = o.stored ?? {}
   const clock = mock.clock(on, { now: T0 })
+  clocks.set($, clock)
   const writes: { key: string; value: unknown }[] = []
   const configs: { key: string; value: unknown }[] = []
   const opened: string[] = []
@@ -187,13 +188,24 @@ async function boot($: Engine, on: On, o: BootOptions = {}): Promise<Boot> {
   return { clock, writes, configs, opened, open, prompts, copies, toasts, fetches, script, session, mcpCalls, app, stored }
 }
 
-const pane = ($: Engine, surface: Surface) => $.ui.mount({ plugin: PLUGIN, surface, component: 'Pane', requestId: 'crew-agents', props: PANE_PROPS as never })
+// 2.5.0 (A5): the pane and the bar draw from frames, written at most once a second, the
+// trailing one 1,000 ms after the write before. A drawing is read after the clock moved one
+// second, so the frame for every event before it has landed.
+const clocks = new WeakMap<Engine, ReturnType<typeof mock.clock>>()
+async function framed<T>($: Engine, mount: () => Promise<T>): Promise<T> {
+  await clocks.get($)?.advance(1_000)
+  const ui = await mount()
+  await clocks.get($)?.settle()
+  return ui
+}
+
+const pane = ($: Engine, surface: Surface) => framed($, () => $.ui.mount({ plugin: PLUGIN, surface, component: 'Pane', requestId: 'crew-agents', props: PANE_PROPS as never }))
 const settingsPane = ($: Engine, surface: Surface) =>
   $.ui.mount({ plugin: PLUGIN, surface, component: 'Pane', requestId: 'crew-settings', props: { ...PANE_PROPS, title: 'Crew settings' } as never })
 const guidePane = ($: Engine, surface: Surface) =>
   $.ui.mount({ plugin: PLUGIN, surface, component: 'Pane', requestId: 'crew-guide', props: { ...PANE_PROPS, title: 'Crew guide' } as never })
 const band = ($: Engine, surface: Surface, columns = BAND_PROPS.bodyColumns) =>
-  $.ui.mount({ plugin: PLUGIN, surface, component: 'AbovePrompt', props: { ...BAND_PROPS, bodyColumns: columns } as never })
+  framed($, () => $.ui.mount({ plugin: PLUGIN, surface, component: 'AbovePrompt', props: { ...BAND_PROPS, bodyColumns: columns } as never }))
 
 // All the words a drawing holds: the Svg sources and alts on the desktop, the Text rows elsewhere.
 async function words(ui: Pick<Mounted, 'findAll'>): Promise<string> {
@@ -684,7 +696,9 @@ test('desktop: the info row is a wrapping row of keyed pills in the default orde
   expect(text).toContain('27%')
   expect(text).toContain('270k / 1M')
   expect(text).toContain('7% left')
-  expect(text).toContain('resets in 1h 07m')
+  // Read a second after T0 (A5): 1h 06m 59s left, or 1h 07m from the whole minute the idle
+  // bar's frame counts from (A7).
+  expect(text).toMatch(/resets in 1h 0[67]m/)
   expect(text).not.toContain('Opus')
   expect(text).not.toContain('$11.73')
   await bar.unmount()
@@ -855,10 +869,13 @@ test('stored limits that are junk or all reset are ignored, and a store failure 
 
 test('desktop: entrances carry their age, so a redraw continues them, and stop once played', async ($, on) => {
   const { clock } = await boot($, on)
+  // 2.5.0 (A5): two seconds with no frame written, so the plan's frame is written at once, and
+  // the pane drawn 200 ms on is mounted as it stands, not a second later.
+  await clock.advance(2_000)
   await $.tool.call(PLAN as never)
   expect(await $.command.run({ command: 'crew', args: 'open' } as never)).toMatchObject({ text: 'Agents panel opened.' })
   await clock.advance(200)
-  const fresh = await pane($, 'desktop')
+  const fresh = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'Pane', requestId: 'crew-agents', props: PANE_PROPS as never })
   expect(await words(fresh)).toMatch(/animation-delay:\s*-\d+ms/)
   await fresh.unmount()
   await clock.advance(5_000)
@@ -867,7 +884,8 @@ test('desktop: entrances carry their age, so a redraw continues them, and stop o
   await later.unmount()
 
   await startTurn($)
-  const bar = await band($, 'desktop')
+  // Mounted as it stands: the presses below write at once (A5).
+  const bar = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'AbovePrompt', props: BAND_PROPS as never })
   await bar.press({ key: 'bar-collapse' })
   await clock.advance(100)
   await bar.press({ key: 'bar-collapse' })
@@ -1198,7 +1216,7 @@ async function expectOnBarPanel(p: Pick<Mounted, 'drawn'>, altStart: string): Pr
 // The session card at a pane width and text size: one drawing, as wide as the pane, right
 // under the title row and before the Main agent heading; no tiles and no usage rows.
 async function expectCard($: Engine, cols: number, z: number): Promise<void> {
-  const p = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'Pane', requestId: 'crew-agents', props: { ...PANE_PROPS, bodyColumns: cols } as never })
+  const p = await framed($, () => $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'Pane', requestId: 'crew-agents', props: { ...PANE_PROPS, bodyColumns: cols } as never }))
   const what = `${cols} columns at ${Math.round(z * 100)}%`
   const svgs = (await p.findAll({ type: 'Svg' })).map(x => ({ alt: String(x.props.alt), width: Number(x.props.width), height: Number(x.props.height) }))
   const at = svgs.findIndex(x => x.alt.startsWith('Session: '))
@@ -1862,7 +1880,9 @@ for (const surface of SURFACES) {
       expect(running).not.toContain('Tasks 0/1')
       expect(running).not.toContain('No task yet')
       const paneRunning = await paneWords($, surface)
-      expect(paneRunning).toContain(surface === 'desktop' ? 'task Fetch mod interface docs: Agents 0/1, 0%' : 'Fetch mod interface docs · Agents 0/1')
+      // Each read comes a second after the one before (A5): the creep may have added a point.
+      if (surface === 'desktop') expect(paneRunning).toMatch(/task Fetch mod interface docs: Agents 0\/1, \d%/)
+      else expect(paneRunning).toContain('Fetch mod interface docs · Agents 0/1')
       if (surface === 'terminal') expect(paneRunning).toContain('WORKING · 1')
       // `autoOpen` is `plan`: a subagent on no planned task does not open the panel.
       expect(opened).toEqual([])
@@ -1958,11 +1978,15 @@ for (const surface of SURFACES) {
       const shown = (await bar.findAll({ type: 'Text' })).map(t => t.text)
       await bar.unmount()
       expect(shown).toContain('limit reached')
-      expect(shown).toContain('resets in 3h 05m')
+      // Two reads moved the clock two seconds (A5): 3h 04m 58s left, or 3h 05m from the whole minute.
+      expect(shown.some(t => /^resets in 3h 0[45]m$/.test(String(t)))).toBe(true)
       expect(shown).not.toContain('0% left')
     }
     await endMainTurn($)
-    expect(await barWords($, surface)).toMatch(/59:59|60:00/)
+    // 2.5.0 (A7): the countdown shows whole minutes until five are left, in the pill and its hover text.
+    const counting = await barWords($, surface)
+    expect(counting).toMatch(/\b(59|60)m\b/)
+    expect(counting).not.toMatch(/\b59:59\b|\b60:00\b/)
     await clock.advance(3_600_000 + 2_000)
     expect(await barWords($, surface)).toContain('expired')
   })
@@ -2451,7 +2475,7 @@ async function expectClearOfGutter(ui: Pick<Mounted, 'drawn'>, cols: number, wha
 // 300 and 380 px panes: the column counts either side of each width.
 const GUTTER_COLS = [37, 38, 47, 48]
 const widePane = ($: Engine, id: string, cols: number, surface: Surface = 'desktop') =>
-  $.ui.mount({ plugin: PLUGIN, surface, component: 'Pane', requestId: id, props: { ...PANE_PROPS, bodyColumns: cols } as never })
+  framed($, () => $.ui.mount({ plugin: PLUGIN, surface, component: 'Pane', requestId: id, props: { ...PANE_PROPS, bodyColumns: cols } as never }))
 
 for (const textSize of [100, 150]) {
   test(`2.0.2: at ${textSize}% Panel text, nothing in the agents panel reaches into the 12 px scroll-bar gutter, Normal or Compact, 300 to 380 px`, async ($, on) => {
@@ -2562,7 +2586,8 @@ test('2.0.3: opening the agents pane records it open for this session, by the co
   expect(stored.paneOpen).toBeUndefined()
   const bar = await band($, 'desktop')
   await bar.press({ key: 'bar-panel' })
-  expect(stored.paneOpen).toEqual({ 'sess-1': T0 })
+  // Drawing the bar moved the clock a second (A5).
+  expect(stored.paneOpen).toEqual({ 'sess-1': T0 + 1_000 })
   await bar.press({ key: 'bar-panel' })
   expect(open.has('crew-agents')).toBe(false)
   expect(stored.paneOpen).toBeUndefined()
@@ -2683,7 +2708,7 @@ test("2.0.3: another session's record, a forgotten one or a fresh startup opens 
 const PANE_DRAWING_LIMIT = 150_000
 
 const narrowPane = ($: Engine) =>
-  $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'Pane', requestId: 'crew-agents', props: { ...PANE_PROPS, bodyColumns: 34 } as never })
+  framed($, () => $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'Pane', requestId: 'crew-agents', props: { ...PANE_PROPS, bodyColumns: 34 } as never }))
 
 async function finishAgents($: Engine, clock: Boot['clock'], n: number): Promise<void> {
   await startTurn($)

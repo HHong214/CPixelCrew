@@ -34,6 +34,7 @@ type BootOptions = { usage?: unknown; app?: unknown }
 async function boot($: Engine, on: On, o: BootOptions = {}): Promise<Boot> {
   const stored: Record<string, unknown> = {}
   const clock = mock.clock(on, { now: T0 })
+  clocks.set($, clock)
   const open = new Set<string>()
   const copies: string[] = []
   const gates = new Map<string, Gate>()
@@ -95,8 +96,19 @@ function gate(): Gate {
   return { promise, open }
 }
 
-const pane = ($: Engine, surface: 'desktop' | 'terminal') => $.ui.mount({ plugin: PLUGIN, surface, component: 'Pane', requestId: 'crew-agents', props: PANE_PROPS as never })
-const band = ($: Engine, surface: 'desktop' | 'terminal') => $.ui.mount({ plugin: PLUGIN, surface, component: 'AbovePrompt', props: BAND_PROPS as never })
+// 2.5.0 (A5): the pane and the bar draw from frames, written at most once a second, the
+// trailing one 1,000 ms after the write before. A drawing is read after the clock moved one
+// second, so the frame for every event before it has landed.
+const clocks = new WeakMap<Engine, ReturnType<typeof mock.clock>>()
+async function framed<T>($: Engine, mount: () => Promise<T>): Promise<T> {
+  await clocks.get($)?.advance(1_000)
+  const ui = await mount()
+  await clocks.get($)?.settle()
+  return ui
+}
+
+const pane = ($: Engine, surface: 'desktop' | 'terminal') => framed($, () => $.ui.mount({ plugin: PLUGIN, surface, component: 'Pane', requestId: 'crew-agents', props: PANE_PROPS as never }))
+const band = ($: Engine, surface: 'desktop' | 'terminal') => framed($, () => $.ui.mount({ plugin: PLUGIN, surface, component: 'AbovePrompt', props: BAND_PROPS as never }))
 
 async function words(ui: Pick<Mounted, 'findAll'>): Promise<string> {
   const svgs = await ui.findAll({ type: 'Svg' })
@@ -417,12 +429,15 @@ test('audit #5: five idle minutes after a turn, the main row says last turn 5m a
   await $.turn.complete({ answer: 'ok', durationMs: 1_000, isAborted: false, turnId: 't1', reason: 'answer' } as never)
   await clock.advance(5 * 60_000)
   await clock.settle()
+  // 2.5.0 (A7): the pane's frame does not change while idle; a frame written after the five
+  // minutes, here the one for opening the pane, shows them.
+  await $.command.run({ command: 'crew', args: 'open' } as never)
   const p = await pane($, 'desktop')
   const alts = (await p.findAll({ type: 'Svg' })).map(s => String(s.props.alt))
   await p.unmount()
   expect(alts.find(a => a.startsWith('Claude,'))).toContain('last turn 5m ago')
-  // The session started a minute before T0: six minutes in.
-  expect(alts.find(a => a.startsWith('Session: '))).toContain('Time 6:00')
+  // The session started a minute before T0: six minutes in (the read itself is a second on).
+  expect(alts.find(a => a.startsWith('Session: '))).toMatch(/Time 6:0[01]/)
 })
 
 test('audit #3b: the session tokens do not drop once the session has passed 200 agents', async ($, on) => {

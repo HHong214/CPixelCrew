@@ -128,6 +128,7 @@ type Boot = {
 async function boot($: Engine, on: On, o: { stored?: Record<string, unknown>; app?: unknown } = {}): Promise<Boot> {
   const stored = o.stored ?? {}
   const clock = mock.clock(on, { now: T0 })
+  clocks.set($, clock)
   const open = new Set<string>()
   on('turn.step', async function* (_$: unknown, e: { turnId: string; index: number }) {
     return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: null } as never
@@ -179,9 +180,20 @@ async function boot($: Engine, on: On, o: { stored?: Record<string, unknown>; ap
   return { clock, mcpCalls, app, stored }
 }
 
-const pane = ($: Engine) => $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'Pane', requestId: 'crew-agents', props: PANE_PROPS as never })
+// 2.5.0 (A5): the pane and the bar draw from frames, written at most once a second, the
+// trailing one 1,000 ms after the write before. A drawing is read after the clock moved one
+// second, so the frame for every event before it has landed.
+const clocks = new WeakMap<Engine, ReturnType<typeof mock.clock>>()
+async function framed<T>($: Engine, mount: () => Promise<T>): Promise<T> {
+  await clocks.get($)?.advance(1_000)
+  const ui = await mount()
+  await clocks.get($)?.settle()
+  return ui
+}
+
+const pane = ($: Engine) => framed($, () => $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'Pane', requestId: 'crew-agents', props: PANE_PROPS as never }))
 const narrowPane = ($: Engine) =>
-  $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'Pane', requestId: 'crew-agents', props: { ...PANE_PROPS, bodyColumns: 34 } as never })
+  framed($, () => $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'Pane', requestId: 'crew-agents', props: { ...PANE_PROPS, bodyColumns: 34 } as never }))
 
 type Node = { type: string; props?: Record<string, unknown>; children?: unknown[] }
 function flatten(root: unknown): Node[] {

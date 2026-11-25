@@ -62,6 +62,7 @@ async function boot($: Engine, on: On): Promise<{ clock: ReturnType<typeof mock.
     }) as never)
   }
   const clock = mock.clock(on, { now: T0 })
+  clocks.set($, clock)
   const open = new Set<string>()
   const listed: Listed[] = []
   let spawned = 0
@@ -150,8 +151,19 @@ async function endAgent($: Engine, agentId: string): Promise<void> {
   await $.turn.complete({ answer: 'ok', durationMs: 10_000, isAborted: false, turnId: `r-${agentId}`, agentId, reason: 'answer' } as never)
 }
 
-const band = ($: Engine, surface: Surface) => $.ui.mount({ plugin: PLUGIN, surface, component: 'AbovePrompt', props: BAND_PROPS as never })
-const pane = ($: Engine, surface: Surface) => $.ui.mount({ plugin: PLUGIN, surface, component: 'Pane', requestId: 'crew-agents', props: PANE_PROPS as never })
+// 2.5.0 (A5): the pane and the bar draw from frames, written at most once a second, the
+// trailing one 1,000 ms after the write before. A drawing is read after the clock moved one
+// second, so the frame for every event before it has landed.
+const clocks = new WeakMap<Engine, ReturnType<typeof mock.clock>>()
+async function framed<T>($: Engine, mount: () => Promise<T>): Promise<T> {
+  await clocks.get($)?.advance(1_000)
+  const ui = await mount()
+  await clocks.get($)?.settle()
+  return ui
+}
+
+const band = ($: Engine, surface: Surface) => framed($, () => $.ui.mount({ plugin: PLUGIN, surface, component: 'AbovePrompt', props: BAND_PROPS as never }))
+const pane = ($: Engine, surface: Surface) => framed($, () => $.ui.mount({ plugin: PLUGIN, surface, component: 'Pane', requestId: 'crew-agents', props: PANE_PROPS as never }))
 
 async function words(ui: Pick<Mounted, 'findAll'>): Promise<string> {
   const svgs = await ui.findAll({ type: 'Svg' })
@@ -320,12 +332,17 @@ test('desktop: decision 5, the fill drops once when an agent joins, then never m
   await spawnCrew($, 1, 'Write the parser')
   await $.tool.call({ tool: STEP, agentId: 'a1', done: 3, total: 4 } as never)
   expect(percentOf(await progressSvg($))).toBe(75)
-  // A second agent joins: three quarters of one task of two.
+  // A second agent joins: three quarters of one task of two. 2.5.0 (A5): each read comes a
+  // second after the one before, so the creep may add a point.
   await spawnCrew($, 2, 'Wire the CLI')
-  expect(percentOf(await progressSvg($))).toBe(38)
+  const joined = percentOf(await progressSvg($))
+  expect(joined).toBeGreaterThanOrEqual(38)
+  expect(joined).toBeLessThanOrEqual(40)
   // The first re-plans to eight steps: its part halves, the bar holds.
   await $.tool.call({ tool: STEP, agentId: 'a1', done: 3, total: 8 } as never)
-  expect(percentOf(await progressSvg($))).toBe(38)
+  const held = percentOf(await progressSvg($))
+  expect(held).toBeGreaterThanOrEqual(joined)
+  expect(held).toBeLessThanOrEqual(joined + 2)
 })
 
 test('desktop: decision 7, a redraw keeps the loops where the clock has them: --pc-t on the root, delays set from it', { options: { theme: 'clawd' } }, async ($, on) => {
@@ -337,7 +354,8 @@ test('desktop: decision 7, a redraw keeps the loops where the clock has them: --
   await clock.advance(1_000)
   const next = await progressSvg($)
   const tOf = (src: string): number => Number(/--pc-t:-(\d+)ms/.exec(src)?.[1] ?? NaN)
-  expect(tOf(next) - tOf(first)).toBe(1_000)
+  // 2.5.0 (A5): each read moves the clock a second too, so the second is two seconds on.
+  expect(tOf(next) - tOf(first)).toBe(2_000)
   // The twinkle and the mascot's loops take their delay from it; the creep keeps its own.
   expect(next).toContain('.t1{animation-delay:calc(var(--pc-t,0ms) - 700ms)}')
   expect(next).toContain('.cw-work .cw-lb{animation-delay:calc(var(--pc-t,0ms) - 250ms)}')
@@ -502,15 +520,20 @@ test('desktop: under a plan, an agent joining never moves the bar back while the
   await spawnCrew($, 1, 'Write the parser')
   await spawnCrew($, 2, 'Wire the CLI')
   await $.tool.call({ tool: STEP, agentId: 'a1', done: 3, total: 4 } as never)
+  // 2.5.0 (A5): each read comes a second after the one before, so the creep may add a point.
   const before = percentOf(await progressSvg($))
-  expect(before).toBe(25)
+  expect(before).toBeGreaterThanOrEqual(25)
+  expect(before).toBeLessThanOrEqual(27)
   // a1 is over before the orchestrator reports it: its part leaves the honest fill, not the bar.
   await endAgent($, 'a1')
-  expect(percentOf(await progressSvg($))).toBe(before)
+  const held = percentOf(await progressSvg($))
+  expect(held).toBeGreaterThanOrEqual(before)
+  expect(held).toBeLessThanOrEqual(before + 2)
   await spawnCrew($, 3, 'Write the docs')
   const after = await progressSvg($)
   expect(after).toContain('Tasks 0/3')
-  expect(percentOf(after)).toBe(before)
+  expect(percentOf(after)).toBeGreaterThanOrEqual(held)
+  expect(percentOf(after)).toBeLessThanOrEqual(held + 2)
 })
 
 test('prompt.submit: the prompt goes on first and comes back as next gave it; the run ends after; failing state breaks nothing', async ($, on) => {

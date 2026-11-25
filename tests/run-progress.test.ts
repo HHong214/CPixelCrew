@@ -32,6 +32,7 @@ const USAGE = {
 async function boot($: Engine, on: On): Promise<{ clock: ReturnType<typeof mock.clock> }> {
   const stored: Record<string, unknown> = {}
   const clock = mock.clock(on, { now: T0 })
+  clocks.set($, clock)
   const open = new Set<string>()
   let spawned = 0
   on('turn.step', async function* (_$: unknown, e: { turnId: string; index: number }) {
@@ -118,7 +119,18 @@ async function endAgent($: Engine, agentId: string, reason: 'answer' | 'error' =
   await $.turn.complete({ answer: 'ok', durationMs: 10_000, isAborted: false, turnId: `r-${agentId}`, agentId, reason } as never)
 }
 
-const band = ($: Engine, surface: Surface) => $.ui.mount({ plugin: PLUGIN, surface, component: 'AbovePrompt', props: BAND_PROPS as never })
+// 2.5.0 (A5): the pane and the bar draw from frames, written at most once a second, the
+// trailing one 1,000 ms after the write before. A drawing is read after the clock moved one
+// second, so the frame for every event before it has landed.
+const clocks = new WeakMap<Engine, ReturnType<typeof mock.clock>>()
+async function framed<T>($: Engine, mount: () => Promise<T>): Promise<T> {
+  await clocks.get($)?.advance(1_000)
+  const ui = await mount()
+  await clocks.get($)?.settle()
+  return ui
+}
+
+const band = ($: Engine, surface: Surface) => framed($, () => $.ui.mount({ plugin: PLUGIN, surface, component: 'AbovePrompt', props: BAND_PROPS as never }))
 
 async function words(ui: Pick<Mounted, 'findAll'>): Promise<string> {
   const svgs = await ui.findAll({ type: 'Svg' })
