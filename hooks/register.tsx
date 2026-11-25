@@ -2466,13 +2466,23 @@ async function onToolCall($: EngineInterface, e: In<'tool.call'>, next: NextOf<'
 // the log, stay as they are. The call itself is never held or changed.
 async function onToolRun($: EngineInterface, e: In<'tool.run'>, next: NextOf<'tool.run'>) {
   try {
-    const at = await $.clock.now()
     const call = activityOf(e.tool, e as unknown as Record<string, unknown>)
     const waiting = `${APPROVAL}${call}`
-    if (e.agentId !== undefined) {
-      await updateRun($, e.agentId, a => (a.doing === waiting ? { ...a, status: a.status === 'waiting' ? 'running' : a.status, doing: call, doingSince: at } : a))
+    // R7: the row is looked at through the read cache first; only one that waits for this call is written.
+    const agentId = e.agentId
+    if (agentId !== undefined) {
+      const cached = await cachedRead('agents', () => read($, agentsState), [])
+      const isWaiting = Array.isArray(cached) && cached.some(a => isRecord(a) && a.agentId === agentId && a.doing === waiting)
+      if (isWaiting) {
+        const at = await $.clock.now()
+        await updateRun($, agentId, a => (a.doing === waiting ? { ...a, status: a.status === 'waiting' ? 'running' : a.status, doing: call, doingSince: at } : a))
+      }
     } else {
-      await put($, mainState, m => (m.doing === waiting ? { ...m, status: m.status === 'waiting' && m.turnStartedAt !== null ? 'working' : m.status, doing: call, doingSince: at } : m))
+      const main = (await cachedRead('main', () => read($, mainState), null)) as MainRun | null
+      if (main && main.doing === waiting) {
+        const at = await $.clock.now()
+        await put($, mainState, m => (m.doing === waiting ? { ...m, status: m.status === 'waiting' && m.turnStartedAt !== null ? 'working' : m.status, doing: call, doingSince: at } : m))
+      }
     }
   } catch {
     // The row keeps its words; the tool still runs.
