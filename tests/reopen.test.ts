@@ -680,3 +680,27 @@ for (const [label, mark] of [['{}', {}], ['null', null], ["today's shape", TODAY
     expect(q.stuck).toEqual([])
   })
 }
+
+// ---------------------------------------------------------------------------
+// C13: a new plan keeps a row the sync closed.
+
+const PLAN_CALL = { tool: 'mcp__CPixelCrew__progress', title: 'A fresh plan', phase: 'delegate', tasks: [{ title: 'Review the parser', agent: 'engineer' }] }
+
+bothWays('C13: a new plan keeps the row the sync closed, so its agent next event reopens it equal to its twin', async x => {
+  await toClose(x)
+  await x.$.tool.call(PLAN_CALL as never)
+  await x.w.clock.settle()
+  await agentStep(x.$, 'a1')
+  await x.same('reopened')
+})
+
+test('C13: a row ended by its own turn.complete is still dropped by a new plan', { timeoutMs: 30_000 }, async ($, on) => {
+  const w = await boot($, on)
+  await userTurn($)
+  await spawnCrew($, 1, 'Write the parser')
+  await endAgent($, 'a1')
+  expect(rowOf(w)?.status).toBe('done')
+  await $.tool.call(PLAN_CALL as never)
+  await w.clock.settle()
+  expect(rowOf(w)).toBeUndefined()
+})
