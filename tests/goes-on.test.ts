@@ -741,3 +741,209 @@ test('J4: with no prompt in between, a resumed agent is counted again by the ope
   expect(runWrites(w)).toBe(n)
   expect(await barWords($, w)).toContain('Agents 1/2')
 })
+
+// ---------------------------------------------------------------------------
+// J5 and J6: what the join of an agent that goes on costs, and what it does when it fails.
+// Both are pinned by what the old hooks do: no join, so a read of `agents` only where the row's
+// own write makes it, none of `run` once this load has read or written it, and no failure.
+
+type Taps = { reads: string[]; fail: { read: boolean; write: boolean } }
+
+// Registered before `boot`, so these two sit above boot's own `state.get` and `state.set` and see
+// every call of the mod, those boot answers itself included. The mod's reads are listed by key;
+// while `fail.read` is set the host's read of `run` is refused (the call is counted, then refused),
+// and while `fail.write` is set its write of `run` is. The kit refuses a read or a write for one
+// key and answers every other.
+function tap(on: On): Taps {
+  const t: Taps = { reads: [], fail: { read: false, write: false } }
+  type Next = (x: unknown) => unknown
+  for (const key of ['agents', 'run']) {
+    on('state.get', { key } as never, ((_$: unknown, e: { plugin: string; key: string }, next: Next) => {
+      if (e.plugin !== PLUGIN) return next(e)
+      t.reads.push(e.key)
+      if (t.fail.read && e.key === 'run') return { deny: 'the read was refused' }
+      return next(e)
+    }) as never)
+  }
+  // What answers a call of the step tool when the mod's hook for it is skipped (its error), as the mod's own answer is 'ok'.
+  on('tool.call', { tool: STEP } as never, (() => ({ result: 'beneath: the mod answered nothing' })) as never)
+  on('state.set', { key: 'run' } as never, ((_$: unknown, e: { plugin: string }, next: Next) => {
+    if (e.plugin === PLUGIN && t.fail.write) return { deny: 'the write was refused' }
+    return next(e)
+  }) as never)
+  return t
+}
+
+type Cost = { agents: number; run: number; agentWrites: number }
+
+// The mod's `state.get` calls of `agents` and `run` made while `event` runs and settles, and its
+// writes of the agent list. The mocked clock is not moved by `settle`, so no tick is counted.
+async function costOf($: Engine, w: World, t: Taps, event: () => Promise<unknown>): Promise<Cost> {
+  const count = (key: string): number => t.reads.filter(k => k === key).length
+  const a0 = count('agents')
+  const r0 = count('run')
+  const w0 = w.writes.filter(x => x.key === 'agents').length
+  await event()
+  await w.clock.settle()
+  return { agents: count('agents') - a0, run: count('run') - r0, agentWrites: w.writes.filter(x => x.key === 'agents').length - w0 }
+}
+
+const stepTool = ($: Engine, agentId: string): Promise<unknown> => $.tool.call({ tool: STEP, agentId, done: 1, total: 3, note: 'Parser drafted' } as never)
+
+// A tool call of the agent held until one millisecond later (no tick falls between): the cost of its
+// start, then, once the clock has moved, of its end.
+async function callCosts($: Engine, w: World, t: Taps): Promise<{ start: Cost; end: Cost }> {
+  w.holds.set('tu-x', w.clock.now() + 1)
+  let call: Promise<unknown> = Promise.resolve()
+  const start = await costOf($, w, t, async () => {
+    call = readFile($, '/repo/x.ts', 'a1', 'tu-x')
+  })
+  const end = await costOf($, w, t, async () => {
+    await w.clock.advance(1)
+    await call
+  })
+  return { start, end }
+}
+
+// A live row of a run still open: the run was written by the spawn, so this load holds it.
+async function bootLiveInOpenRun($: Engine, on: On): Promise<{ w: World; t: Taps }> {
+  const t = tap(on)
+  const w = await boot($, on)
+  await userTurn($)
+  await spawnCrew($, 1, 'Write the parser')
+  await w.clock.advance(2_000)
+  await w.clock.settle()
+  // Set-up: the row is running, its run open and holding it.
+  expect(rowOf(w)?.status).toBe('running')
+  expect(runOf(w)?.ids).toEqual(['a1'])
+  expect(runOf(w)?.endedAt).toBeUndefined()
+  return { w, t }
+}
+
+// J5. The numbers are the old hooks' (they join nothing): the join reads no agent list beyond what
+// the row's own write reads, and no `run`, which this load wrote. Counted by key around each event.
+const OLD_LIVE: Record<string, { agents: number; run: number }> = {
+  'a tool call starting': { agents: 1, run: 0 },
+  'a tool call ending': { agents: 1, run: 0 },
+  'a model request ending': { agents: 1, run: 0 },
+  'a call of the step tool': { agents: 3, run: 4 },
+}
+for (const [label, old] of Object.entries(OLD_LIVE)) {
+  test(`J5: ${label} of a live row already in the open run reads the agent list and the run no more than before the join`, { timeoutMs: 60_000 }, async ($, on) => {
+    const { w, t } = await bootLiveInOpenRun($, on)
+    let cost: Cost
+    if (label === 'a tool call starting') cost = (await callCosts($, w, t)).start
+    else if (label === 'a tool call ending') cost = (await callCosts($, w, t)).end
+    else if (label === 'a model request ending') cost = await costOf($, w, t, () => agentStep($, 'a1'))
+    else cost = await costOf($, w, t, () => stepTool($, 'a1'))
+    // Set-up: the event wrote the row.
+    expect(cost.agentWrites).toBeGreaterThan(0)
+    expect(cost.agents).toBeLessThanOrEqual(old.agents)
+    expect(cost.run).toBeLessThanOrEqual(old.run)
+  })
+}
+
+// J5, a row that is not live: a call started while the row ran ends after its agent's own end
+// and after a prompt ended the run, on a row that stays `done`.
+test('J5: a late call end on a done row reads the agent list and the run no more than before the join', { timeoutMs: 60_000 }, async ($, on) => {
+  const t = tap(on)
+  const w = await boot($, on)
+  await userTurn($)
+  await spawnCrew($, 1, 'Write the parser')
+  w.holds.set('tu-late', w.clock.now() + 1)
+  const call = readFile($, '/repo/late.ts', 'a1', 'tu-late')
+  await w.clock.settle()
+  await endAgent($, 'a1')
+  await endMainTurn($)
+  await userTurn($, 'Next', 't2')
+  await w.clock.settle()
+  // Set-up: the row ended done and the prompt ended the run; this load wrote both.
+  expect(rowOf(w)?.status).toBe('done')
+  expect(runOf(w)?.endedAt).toBeDefined()
+  const cost = await costOf($, w, t, async () => {
+    await w.clock.advance(1)
+    await call
+  })
+  // Set-up: the end wrote the row, which stays done.
+  expect(cost.agentWrites).toBeGreaterThan(0)
+  expect(rowOf(w)).toMatchObject({ status: 'done', doing: 'Finished' })
+  expect(cost.agents).toBeLessThanOrEqual(2)
+  expect(cost.run).toBe(0)
+})
+
+// J6. A quiet running row whose run a prompt ended: the join is due. The host's read of `run`
+// is refused (`read`), or its write is (`write`), only while the event runs.
+const FAULTS = ['read', 'write'] as const
+
+for (const fault of FAULTS) {
+  test(`J6: the host's ${fault} of run failing, a call of the step tool of a quiet running row whose run a prompt ended still answers ok and its row is written`, { timeoutMs: 60_000 }, async ($, on) => {
+    const t = tap(on)
+    const w = await bootQuietEnded($, on)
+    t.fail[fault] = true
+    const answer = (await stepTool($, 'a1')) as { result?: unknown }
+    await w.clock.settle()
+    t.fail[fault] = false
+    expect(String(answer.result)).toBe('ok')
+    expect(rowOf(w)).toMatchObject({ status: 'running', stepDone: 1, stepTotal: 3, stepNote: 'Parser drafted' })
+  })
+
+  test(`J6: the host's ${fault} of run failing, a tool call of a quiet running row whose run a prompt ended still answers and its row is written`, { timeoutMs: 60_000 }, async ($, on) => {
+    const t = tap(on)
+    const w = await bootQuietEnded($, on)
+    t.fail[fault] = true
+    const answer = (await readFile($, '/repo/next.ts', 'a1', 'tu-next')) as { result?: unknown; deny?: unknown }
+    await w.clock.settle()
+    t.fail[fault] = false
+    expect(String(answer.result)).toBe('ok')
+    expect(answer.deny).toBeUndefined()
+    const entry = rowOf(w)?.log.find(e => e.callId === 'tu-next')
+    expect(entry).toMatchObject({ outcome: 'ok' })
+    expect(rowOf(w)?.status).toBe('running')
+  })
+
+  for (const [label, event] of [
+    ['turn.step', ($: Engine) => agentStep($, 'a1')],
+    ['turn.start', ($: Engine) => agentTurnStart($, 'a1')],
+  ] as [string, ($: Engine) => Promise<void>][]) {
+    test(`J6: the host's ${fault} of run failing, ${label} of a row the 15-minute rule closed reopens it after a prompt ended the run, and the main agent still waits for 1 agent`, { timeoutMs: 90_000 }, async ($, on) => {
+      const t = tap(on)
+      const w = await boot($, on)
+      await userTurn($)
+      await spawnCrew($, 1, 'Write the parser')
+      for (let i = 0; i < 3; i += 1) await readFile($, `/repo/file${i}.ts`, 'a1', `tu-f${i}`)
+      await endMainTurn($)
+      await w.clock.advance(STUCK_MS + 5_000)
+      await w.clock.advance(1_000)
+      // Set-up: the sync closed the row, as A3 does in 2.5.0, and the next prompt ended the run.
+      expect(rowOf(w)?.status).toBe('failed')
+      expect(rowOf(w)?.log.at(-1)?.text).toBe(END_LINE)
+      await userTurn($, 'Next', 't2')
+      await endMainTurn($, 't2')
+      await w.clock.settle()
+      expect(runOf(w)?.endedAt).toBeDefined()
+      t.fail[fault] = true
+      await event($)
+      await w.clock.settle()
+      t.fail[fault] = false
+      // Set-up: the event reopened the row (C3).
+      expect(rowOf(w)?.status).toBe('running')
+      expect(mainOf(w)).toMatchObject({ status: 'waiting', doing: 'Waiting for 1 agent' })
+    })
+  }
+}
+
+// J6, the first read of `run` this load makes: stored at load as the run a prompt ended (nothing
+// read or wrote it since), so a join that reads the host reads it here.
+test("J6: the host's read of run failing as the first this load makes, a call of the step tool of a quiet running row still answers ok and its row is written", { timeoutMs: 60_000 }, async ($, on) => {
+  const t = tap(on)
+  const w = await boot($, on, {
+    junk: { agents: [QUIET_ROW], run: { ...QUIET_RUN, endedAt: QUIET_START + 60_000 } },
+    listed: [{ id: 'a1', status: 'running', description: 'Write the parser', type: 'pixel-crew:engineer' }],
+  })
+  t.fail.read = true
+  const answer = (await stepTool($, 'a1')) as { result?: unknown }
+  await w.clock.settle()
+  t.fail.read = false
+  expect(String(answer.result)).toBe('ok')
+  expect(rowOf(w)).toMatchObject({ status: 'running', stepDone: 1, stepTotal: 3, stepNote: 'Parser drafted' })
+})
