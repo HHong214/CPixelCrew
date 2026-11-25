@@ -812,3 +812,68 @@ test('CA-6: frames compose from nested junk: log entries that are not records, l
   await p.unmount()
   await b.unmount()
 })
+
+// ---------------------------------------------------------------------------
+// Found in the review of the slice B build.
+
+test('B8: while a turn and an agent work, 9 seconds in which no shown time steps and the progress row is not due write neither frame', { options: OWNER_OPTIONS as never, timeoutMs: 60_000 }, async ($, on) => {
+  const w = await boot($, on, { stored: OWNER_STORED })
+  const p = await pane($)
+  const b = await band($)
+  await userTurn($)
+  await spawnCrew($, w, 1, 'Write the parser')
+  // t: the times on show stepped to 2m, the progress row was just rebuilt; nothing is due before t + 10 s.
+  const t = T0 + 2 * MIN
+  await w.clock.advance(t - w.clock.now())
+  await w.clock.settle()
+  await w.clock.advance(9_000)
+  expect(w.writes.filter(x => (x.key === 'barFrame' || x.key === 'paneFrame') && x.at > t).map(x => `${x.key} at t + ${x.at - t} ms`)).toEqual([])
+  await p.unmount()
+  await b.unmount()
+})
+
+test('B4: drawn directly beside its text, with hero cards on, at mascots 200% and 150%, a row’s mascot is the same bytes whatever its words and its step bar', async () => {
+  const rates: Rates = { at: T0, rates: FALLBACK_RATES, isLive: false }
+  for (const iconSize of [200, 150]) {
+    const c: Ctx = { W: 480, now: T0, settings: { ...DEFAULTS, heroCard: true, iconSize }, rates, clock: T0 - 30_000 }
+    const long = 'Running a long command that wraps over three lines of the row: npx tsc -p tsconfig.json && node tools/check.mjs --all --verbose'
+    // Short rows first: there the text's height decides most often how a mascot was centred in 2.4.0.
+    const short = { ...AGENT, description: 'Fix', model: '', doing: '', stepTotal: 0, stepDone: 0, stepNote: '' }
+    for (const status of ['running', 'done'] as const) {
+      const base = { ...short, status, ...(status === 'done' ? { endedAt: T0 - 5_000 } : {}) } as AgentRun
+      const rows: [string, AgentRun][] = [
+        ['empty doing', base],
+        ['one line of doing', { ...base, doing: 'Reading x.ts' }],
+        ['long doing', { ...base, doing: long }],
+        ['no step bar', base],
+        ['a step bar', { ...base, stepTotal: 6, stepDone: 3, stepNote: 'ticks' }],
+      ]
+      const drawn = rows.map(([what, a]) => [what, rowOf(agentDrawing(c, a))] as const)
+      // Side by side at this width: no mascot laid over its text.
+      for (const [what, r] of drawn) expect([iconSize, status, what, (r as Row & { over?: boolean }).over === true]).toEqual([iconSize, status, what, false])
+      const first = drawn[0]?.[1].mascot.source ?? ''
+      for (const [what, r] of drawn) expect([iconSize, status, what, r.mascot.source === first]).toEqual([iconSize, status, what, true])
+    }
+  }
+})
+
+test('B11: with the pane never mounted, ten idle minutes write no pane frame; a pane closed with the bar’s panel button gets none after it is closed', { options: { barCache: false } as never, timeoutMs: 60_000 }, async ($, on) => {
+  const w = await boot($, on)
+  const b = await band($)
+  await userTurn($)
+  await endMainTurn($)
+  await w.clock.advance(5_000)
+  const from = w.clock.now()
+  await w.clock.advance(10 * MIN)
+  expect(w.writes.filter(x => x.key === 'paneFrame' && x.at > from).map(x => `paneFrame at +${Math.round((x.at - from) / 1000)} s`)).toEqual([])
+  // Opened, drawn, then closed with the bar's panel button.
+  await $.command.run({ command: 'crew', args: 'open' } as never)
+  const p = await pane($)
+  await w.clock.advance(2 * MIN)
+  await b.press({ key: 'bar-panel' })
+  await p.unmount()
+  const closed = w.clock.now()
+  await w.clock.advance(10 * MIN)
+  expect(w.writes.filter(x => x.key === 'paneFrame' && x.at > closed).map(x => `paneFrame at +${Math.round((x.at - closed) / 1000)} s`)).toEqual([])
+  await b.unmount()
+})
