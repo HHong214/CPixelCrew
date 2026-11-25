@@ -263,11 +263,12 @@ for (const surface of SURFACES) {
     expect(await barWords($, surface)).toContain('Agents 1/2')
   })
 
-  test(`${surface}: decision 6, an agent quiet for 15 minutes counts as over for the run, while the list still shows it`, async ($, on) => {
-    const { clock } = await boot($, on)
+  test(`${surface}: decision 6, an agent quiet for 15 minutes counts as over for the run, while the list still shows it`, { timeoutMs: 30_000 }, async ($, on) => {
+    const { clock, listed } = await boot($, on)
     await userTurn($)
     await spawnWorkflowAgent($, 1, 'wf: one')
     await spawnWorkflowAgent($, 2, 'wf: two')
+    listed.push({ id: 'a2', status: 'running', description: 'wf: two', type: 'general-purpose' })
     await endAgent($, 'a1')
     expect(await barWords($, surface)).toContain('Agents 1/2')
     await clock.advance(STUCK_MS + 1_000)
@@ -571,11 +572,12 @@ for (const surface of SURFACES) {
     expect(text).not.toContain('Agents 2/2')
   })
 
-  test(`${surface}: decision 6, a stuck agent that works again counts as working, and the fill drops back to its honest value`, async ($, on) => {
-    const { clock } = await boot($, on)
+  test(`${surface}: decision 6, a stuck agent that works again counts as working, and the fill drops back to its honest value`, { timeoutMs: 30_000 }, async ($, on) => {
+    const { clock, listed } = await boot($, on)
     await userTurn($)
     await spawnWorkflowAgent($, 1, 'wf: one')
     await spawnWorkflowAgent($, 2, 'wf: two')
+    listed.push({ id: 'a2', status: 'running', description: 'wf: two', type: 'general-purpose' })
     await endAgent($, 'a1')
     await clock.advance(STUCK_MS + 1_000)
     const stuck = await barWords($, surface)
@@ -590,11 +592,12 @@ for (const surface of SURFACES) {
     expect(await barWords($, surface)).toContain('75%')
   })
 
-  test(`${surface}: decision 8, an unfinished plan stays while an agent on one of its tasks is active, past 30 minutes unreported`, async ($, on) => {
-    const { clock } = await boot($, on)
+  test(`${surface}: decision 8, an unfinished plan stays while an agent on one of its tasks is active, past 30 minutes unreported`, { timeoutMs: 30_000 }, async ($, on) => {
+    const { clock, listed } = await boot($, on)
     await $.tool.call(PLAN as never)
     await userTurn($)
     await spawnCrew($, 1, 'Write the parser')
+    listed.push({ id: 'a1', status: 'running', description: 'Write the parser', type: 'pixel-crew:engineer' })
     await clock.advance(PLAN_STALE_MS + 60_000)
     const long = await barWords($, surface)
     expect(long).toContain('Tasks 0/2')

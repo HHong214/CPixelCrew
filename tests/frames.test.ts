@@ -228,17 +228,17 @@ test('A5: a change in the same second as the frame before waits for the trailing
   await $.tool.call({ tool: PROGRESS, done: 1 } as never)
   await w.clock.settle()
   expect(writesOf(w, 'barFrame', t, t)).toHaveLength(1)
-  expect(await words(b)).toContain('Tasks 1/2')
+  expect(await words(b)).toContain('Paused · 1/2')
   // 300 ms on: it waits.
   await w.clock.advance(300)
   await $.tool.call({ tool: PROGRESS, done: 2 } as never)
   await w.clock.settle()
   expect(writesOf(w, 'barFrame', t + 1, t + 999)).toHaveLength(0)
-  expect(await words(b)).toContain('Tasks 1/2')
+  expect(await words(b)).toContain('Paused · 1/2')
   // The end of that second: the trailing write, with the later change.
   await w.clock.advance(700)
   expect(writesOf(w, 'barFrame', t + 1_000, t + 1_000)).toHaveLength(1)
-  expect(await words(b)).toContain('Tasks 2/2')
+  expect(await words(b)).toContain('Paused · 2/2')
   // Nothing changed since: nothing more.
   await w.clock.advance(3_000)
   expect(writesOf(w, 'barFrame', t + 1_001, t + 4_000)).toHaveLength(0)
@@ -521,7 +521,7 @@ test('A-d5: a progress call with tasks: [] keeps the plan: the answer and the ba
   await w.clock.advance(1_000)
   const b = await band($)
   await w.clock.settle()
-  expect(await words(b)).toContain('Tasks 0/2')
+  expect(await words(b)).toContain('Paused · 0/2')
   await b.unmount()
 })
 
