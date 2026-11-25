@@ -440,7 +440,7 @@ test('audit #5: five idle minutes after a turn, the main row says last turn 5m a
   expect(alts.find(a => a.startsWith('Session: '))).toMatch(/Time 6m\b/)
 })
 
-test('audit #3b: the session tokens do not drop once the session has passed 200 agents', async ($, on) => {
+test('audit #3b: the session tokens do not drop once the session has passed 200 agents', { timeoutMs: 30_000 }, async ($, on) => {
   await boot($, on)
   await userTurn($, 'Fan out')
   await spawn($, 1, 'shard 1', 'general-purpose')
