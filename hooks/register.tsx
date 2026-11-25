@@ -65,6 +65,7 @@ import {
   closeLog,
   closedRun,
   fitRows,
+  isLive,
   isLost,
   isMarked,
   LIVE_LOG,
@@ -595,6 +596,17 @@ function reopened(a: AgentRun, at: number): AgentRun {
   return { ...unmarked(a), status: mark.status, endedAt: undefined, doing: mark.doing, doingSince: mark.doingSince, activeAt: at, log }
 }
 
+// A row that ended for real: `done` or `failed`, with no mark that fits. `reopened` has had its
+// turn first, so a row the 15-minute rule closed is not one.
+const isEnded = (a: AgentRun): boolean => a.status === 'done' || a.status === 'failed'
+
+// The row of an agent that goes on after its end (G2): running, no end time, `Getting started`
+// from `at`, a `Resumed` note in its log, and whatever it had kept. The one place it is built:
+// `agent.spawn` for a known agent id, and the `turn.start` or `turn.step` of an agent whose row ended.
+function resumedRow(a: AgentRun, at: number): AgentRun {
+  return { ...unmarked(a), status: 'running', endedAt: undefined, doing: 'Getting started', doingSince: at, log: logPush(logOf(a), logEntry(at, 'note', 'Resumed')) }
+}
+
 function endText(reason: string, ms: number, actions?: number): [string, LogOutcome] {
   if (reason === 'answer') return [actions === undefined ? `Finished in ${fmtTime(ms)}` : `Done in ${fmtSpan(ms)}, ${plural(actions, 'action')}`, 'ok']
   if (reason === 'aborted') return [`Interrupted after ${fmtSpan(ms)}`, 'denied']
@@ -665,13 +677,17 @@ async function resetMark($: EngineInterface): Promise<void> {
   await put($, runState, r => (r ? { ...r, high: 0, highKey: undefined } : r))
 }
 
-function stepRun(a: AgentRun, e: In<'turn.step'>, usage: TurnUsage | null): AgentRun {
+// What an agent's model request does to its row, at `at`: the row runs, its approval words off. A
+// row that ended for real is resumed as `agent.spawn` resumes it (`resumedRow`) before the
+// request's own tokens are added.
+function stepRun(a: AgentRun, e: In<'turn.step'>, usage: TurnUsage | null, at: number): AgentRun {
+  const row = isEnded(a) ? resumedRow(a, at) : a
   const base: AgentRun = {
-    ...a,
+    ...row,
     status: 'running',
     endedAt: undefined,
     effort: typeof e.effort === 'string' ? e.effort : a.effort,
-    doing: unwait(a.doing),
+    doing: unwait(row.doing),
   }
   if (!usage) return base
   const model = usage.model || e.model || a.model
@@ -759,9 +775,10 @@ async function putAgents($: EngineInterface, change: (list: AgentRun[]) => Agent
   return out
 }
 
-async function updateRun($: EngineInterface, agentId: string, change: (a: AgentRun) => AgentRun): Promise<boolean> {
+// Whether the agent has a row, and that row as the write left it stored (none when the fit let it go).
+async function updateRun($: EngineInterface, agentId: string, change: (a: AgentRun) => AgentRun): Promise<{ isFound: boolean; row: AgentRun | undefined }> {
   let isFound = false
-  await putAgents($, list => {
+  const stored = await putAgents($, list => {
     isFound = false
     let isChanged = false
     const next = list.map(a => {
@@ -773,24 +790,58 @@ async function updateRun($: EngineInterface, agentId: string, change: (a: AgentR
     })
     return isChanged ? next : list
   })
-  return isFound
+  return { isFound, row: isFound ? stored.find(a => a.agentId === agentId) : undefined }
 }
 
 // An agent's event changes its row: a row the 15-minute rule closed is reopened first (C3),
-// then `change` makes the event's own change, as to a row never closed. After a reopen the
-// main agent follows its subagents again and the run's mark is taken afresh, as after a
+// then `change` makes the event's own change, as to a row never closed. After a reopen, or
+// after `change` resumed a row that ended for real (G2), the main agent follows its
+// subagents again (`settleMain`). Then the row the write left stored (no read of the agent
+// list) is looked at: when it is live and the run under way does not hold its id, the agent
+// joins as a spawned one does (J1); a write that did not land, or left the row not live,
+// joins nothing (J2), and an agent already in the open run costs no write of the run. The
+// join never fails the event (J6): the row's write stands whatever the join's read or write
+// does. The run's mark is taken afresh after a reopen, a resume or a join, as after a
 // subagent's end (C5, C6).
 async function updateAgent($: EngineInterface, agentId: string, at: number, change: (a: AgentRun) => AgentRun): Promise<boolean> {
   let isReopened = false
-  const isFound = await updateRun($, agentId, a => {
+  let isResumed = false
+  const { isFound, row: stored } = await updateRun($, agentId, a => {
     isReopened = isMarked(a)
-    return change(reopened(a, at))
+    const row = reopened(a, at)
+    const changed = change(row)
+    isResumed = isEnded(row) && changed.endedAt === undefined && isActive(changed)
+    return changed
   })
-  if (isFound && isReopened) {
-    await settleMain($)
-    await holdFill($, at)
+  if (!isFound) return false
+  if (isReopened || isResumed) await settleMain($)
+  let isJoined = false
+  try {
+    isJoined = !!stored && (await joinLive($, stored, at))
+  } catch {
+    // The run is joined by the agent's next event.
   }
-  return isFound
+  if (isReopened || isResumed || isJoined) await holdFill($, at)
+  return true
+}
+
+// J1: the agent's row, as its event's write left it stored, joins the run under way when it is
+// live at `at` and the run does not hold its id (no run, the last run ended, or its ids lack the
+// id). The run is read through the read cache (J5), so a row that is not live, or is already in
+// the open run, costs no host read that this load has not made; the write of `run` decides again.
+// The join is timed after the row's write, so a prompt that read the list before it leaves the
+// run open. True when the run was written; throws when that write fails (a failed read counts as no run held).
+async function joinLive($: EngineInterface, row: AgentRun, at: number): Promise<boolean> {
+  if (!isLive(row, at)) return false
+  const holds = (r: Run | null | undefined): boolean => !!r && r.endedAt === undefined && Array.isArray(r.ids) && r.ids.includes(row.id)
+  if (holds((await cachedRead('run', () => read($, runState), undefined)) as Run | null | undefined)) return false
+  const joinAt = await $.clock.now()
+  let isJoined = false
+  await put($, runState, r => {
+    isJoined = !holds(r)
+    return isJoined ? joinRun(r, row.id, joinAt) : r
+  })
+  return isJoined
 }
 
 // ---------------------------------------------------------------------------
@@ -2472,9 +2523,7 @@ async function addRun($: EngineInterface, e: In<'agent.spawn'>, agentId: string 
     const known = agentId === undefined ? undefined : list.find(a => a.agentId === agentId)
     if (known) {
       // A resumed agent keeps its row, its tokens and its log.
-      return list.map(a =>
-        a === known ? { ...unmarked(a), status: 'running', endedAt: undefined, doing: 'Getting started', doingSince: at, log: logPush(logOf(a), logEntry(at, 'note', 'Resumed')) } : a,
-      )
+      return list.map(a => (a === known ? resumedRow(a, at) : a))
     }
     const round = 1 + (description ? list.filter(a => norm(a.description) === norm(description)).length : 0)
     const run: AgentRun = {
@@ -2562,11 +2611,17 @@ async function onAgentSpawn($: EngineInterface, e: In<'agent.spawn'>, next: Next
   return started
 }
 
+// A turn starts. An agent's: the message that woke its loop. A running row stays as it is, a
+// waiting row runs with its approval words off, and a row that ended for real is resumed (G2,
+// `resumedRow`). The main agent's: its row and the session's turn figures start over.
 async function onTurnStart($: EngineInterface, e: In<'turn.start'>, next: NextOf<'turn.start'>) {
   try {
     const at = await $.clock.now()
     if (e.agentId !== undefined) {
-      await updateAgent($, e.agentId, at, a => (a.status === 'running' ? a : { ...a, status: 'running', endedAt: undefined, doing: unwait(a.doing), doingSince: at }))
+      await updateAgent($, e.agentId, at, a => {
+        if (a.status === 'running') return a
+        return isEnded(a) ? resumedRow(a, at) : { ...a, status: 'running', endedAt: undefined, doing: unwait(a.doing), doingSince: at }
+      })
     } else {
       live.turnActions = 0
       const prompt = clip(printable(e.text), 60)
@@ -2754,7 +2809,7 @@ async function* onTurnStep($: EngineInterface, e: In<'turn.step'>, next: NextOf<
     try {
       const agentId = e.agentId
       const at = await $.clock.now()
-      await updateAgent($, agentId, at, a => ({ ...stepRun(a, e, result.usage), activeAt: at }))
+      await updateAgent($, agentId, at, a => ({ ...stepRun(a, e, result.usage, at), activeAt: at }))
     } catch {
       // That step's tokens go uncounted on the row.
     }
