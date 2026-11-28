@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.5.4 (2026-11-28)
+
+### Fixed
+
+- In the `cat` theme the Search agent's eye patch looked see-through on a dark panel: it was painted in the same grey as the pirate hat, which is almost the grey of the hero card behind the cat, so the card seemed to show through the cat's head. The patch, and its strap when the cat is asleep, are now a darker grey that reads as a solid patch on a dark and a light panel alike. The hat and the crab are unchanged.
+
+### Added
+
+- The README has a Mascots section: every mascot of both themes by name, in each pose the mod shows it in, with the Helper's six colours. The pictures are in `docs/mascots/` and are made from the mod's own sprite code by `node tools/mascot-gallery.mjs`.
+
 ## 2.5.3 (2026-11-25)
 
 ### Fixed
