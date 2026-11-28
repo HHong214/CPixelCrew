@@ -573,13 +573,14 @@ const CATS: Record<string, CatCostume> = {
   },
   // A pirate's hat with a band in the accent colour, a patch over one eye (asleep,
   // a flatter one over the shut eye, its strap running up across the brow to
-  // the hat); the cutlass thrusts.
+  // the hat); the cutlass thrusts. The patch is a darker grey than the hat: the
+  // hat's grey is nearly the dark hero card's, so a patch in it read as a hole.
   scout: (k, t) => {
     stamp(k.hat, 8, 3, ['....kkkkk', '...kkkwkkk', '..kkkkkkkkk', 'k.ttttttttt.k', 'ggggggggggggg'], { k: '#55514C', w: '#F8F6F1', t, g: '#F5C542' })
     const patch: Cells = k.shut
       ? [[10, 8, 1, 1], [11, 9, 1, 1], [12, 10, 1, 1], [13, 11, 1, 1], [14, 12, 1, 1], [15, 13, 1, 1], [16, 14, 6, 4], [15, 15, 8, 2], [22, 13, 1, 1], [23, 12, 1, 1]]
       : [[20, 8, 3, 1], [17, 9, 4, 10], [16, 10, 6, 8], [15, 11, 8, 6]]
-    put(k.hat, patch, '#55514C')
+    put(k.hat, patch, '#2E2C2A')
     k.hold(f => { f(24, 4, 1, 10, '#C9CCD2'); f(23, 14, 3, 1, WOOD) }, [[4, 20, 0.15], [3, 18], [2, 17, -0.2]])
   },
   // A beret tilted over the right ear; the brush dabs forward and back.

@@ -850,10 +850,10 @@ test('the blink: the lids are drawn in work and done only, and cover both open e
 
 test('asleep, the writer, tester and scout wear their eyewear flat over the shut eyes, not round open ones', async () => {
   // The colour each costume's eyewear is painted in: the kind's accent for the
-  // rings and the goggle rim, the patch's own grey for the scout.
-  const colour: Record<string, string> = { writer: '#B56BC7', tester: '#5BA23B', scout: '#55514C' }
+  // rings and the goggle rim, the patch's own dark grey for the scout.
+  const colour: Record<string, string> = { writer: '#B56BC7', tester: '#5BA23B', scout: '#2E2C2A' }
   const wear = (role: string, pose: 'rest' | 'done'): { cells: number; w: number; h: number } => {
-    // The scout's hat shares the grey but sits above the patch (rows 3-7; 9-13 asleep).
+    // The scout's hat sits above the patch (rows 3-7; 9-13 asleep): only the patch and its strap count.
     const from = role === 'scout' ? (pose === 'rest' ? 14 : 8) : 0
     const cells = cellsOf(tintsOf(headAndBody(without(draw('cat', role, pose), ['ct-bl']))).filter(p => p[4] === colour[role])).filter(([, y]) => y >= from)
     const [x0, y0, x1, y1] = [Math.min(...cells.map(c => c[0])), Math.min(...cells.map(c => c[1])), Math.max(...cells.map(c => c[0])) + 1, Math.max(...cells.map(c => c[1])) + 1]
@@ -874,4 +874,18 @@ test('asleep, the writer, tester and scout wear their eyewear flat over the shut
   expect(`scout awake taller than wide ${sitting.h > sitting.w}`).toBe('scout awake taller than wide true')
   expect(`scout asleep wider than tall ${asleep.w > asleep.h}`).toBe('scout asleep wider than tall true')
   expect(`scout asleep under half the cells ${asleep.cells * 2 < sitting.cells}`).toBe('scout asleep under half the cells true')
+})
+
+test("the scout cat's eye patch is not the hat's grey, which reads as a hole in the dark hero card", async () => {
+  // The hat's grey, #55514C, is nearly the dark card's glass (#F4F1E8 at 30% over a dark
+  // page), so a patch in it looked see-through. Below the hat (rows 3-7; 9-13 asleep)
+  // nothing is painted in that grey, and the patch and its strap are a darker one.
+  for (const pose of ['done', 'rest'] as const) {
+    const tints = tintsOf(headAndBody(without(draw('cat', 'scout', pose), ['ct-bl'])))
+    const below = pose === 'rest' ? 14 : 8
+    const hatGrey = cellsOf(tints.filter(p => p[4] === '#55514C')).filter(([, y]) => y >= below).length
+    const patch = cellsOf(tints.filter(p => p[4] === '#2E2C2A')).filter(([, y]) => y >= below).length
+    expect(`${pose}: cells in the hat's grey below the hat ${hatGrey}`).toBe(`${pose}: cells in the hat's grey below the hat 0`)
+    expect(`${pose}: has a patch ${patch > 0}`).toBe(`${pose}: has a patch true`)
+  }
 })
