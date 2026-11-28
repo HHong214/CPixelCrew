@@ -174,6 +174,132 @@ Two themes draw the same layout: `cat` (the default), a black cat with a big rou
 
 Three palettes colour the usage meters, the bar's pills and the model series of the usage split: `ocean` (teal and blue, the default), `sunset` (orange and pink) and `classic` (green, amber, red). The progress tracks keep their own purple and green under every palette.
 
+## Mascots
+
+<!-- mascots:start (made by tools/mascot-gallery.mjs; edit there, not here) -->
+
+Every mascot the mod draws, in both themes. The pictures are in `docs/mascots/`, made from the mod's own sprite code by `node tools/mascot-gallery.mjs`, and they move as they do in the app (not when your system asks for reduced motion). Each sits on the hero card the agents panel draws by default; the bar draws its mascot without a card. A costume is shown in its kind's base colour (see Work kinds).
+
+### Cat (`theme cat`, the default)
+
+**Claude, the main agent.** Working, waiting and resting are the main row of the panel. Riding is the bar's progress row, while a plan or a run is running and once it is done.
+
+| Working | Waiting | Resting | Riding its broom |
+|---|---|---|---|
+| <img src="docs/mascots/cat/main-work.svg" width="102" height="96" alt="Cat: Claude, working"> | <img src="docs/mascots/cat/main-wait.svg" width="102" height="96" alt="Cat: Claude, waiting"> | <img src="docs/mascots/cat/main-rest.svg" width="102" height="96" alt="Cat: Claude, resting"> | <img src="docs/mascots/cat/main-ride.svg" width="102" height="96" alt="Cat: Claude, riding its broom"> |
+
+**Agents, by kind of work.** Working, waiting and done are an agent's row; planned is a task no agent has started yet.
+
+| Kind | Working | Waiting | Done | Planned |
+|---|---|---|---|---|
+| **Search**<br>pirate hat and cutlass | <img src="docs/mascots/cat/scout-work.svg" width="102" height="96" alt="Cat: Search, working"> | <img src="docs/mascots/cat/scout-wait.svg" width="102" height="96" alt="Cat: Search, waiting"> | <img src="docs/mascots/cat/scout-done.svg" width="102" height="96" alt="Cat: Search, done"> | <img src="docs/mascots/cat/scout-planned.svg" width="102" height="96" alt="Cat: Search, planned"> |
+| **Analyze**<br>visor and bar chart | <img src="docs/mascots/cat/analyst-work.svg" width="102" height="96" alt="Cat: Analyze, working"> | <img src="docs/mascots/cat/analyst-wait.svg" width="102" height="96" alt="Cat: Analyze, waiting"> | <img src="docs/mascots/cat/analyst-done.svg" width="102" height="96" alt="Cat: Analyze, done"> | <img src="docs/mascots/cat/analyst-planned.svg" width="102" height="96" alt="Cat: Analyze, planned"> |
+| **Build**<br>chef's toque | <img src="docs/mascots/cat/chef-work.svg" width="102" height="96" alt="Cat: Build, working"> | <img src="docs/mascots/cat/chef-wait.svg" width="102" height="96" alt="Cat: Build, waiting"> | <img src="docs/mascots/cat/chef-done.svg" width="102" height="96" alt="Cat: Build, done"> | <img src="docs/mascots/cat/chef-planned.svg" width="102" height="96" alt="Cat: Build, planned"> |
+| **Refactor**<br>hard hat and wrench | <img src="docs/mascots/cat/engineer-work.svg" width="102" height="96" alt="Cat: Refactor, working"> | <img src="docs/mascots/cat/engineer-wait.svg" width="102" height="96" alt="Cat: Refactor, waiting"> | <img src="docs/mascots/cat/engineer-done.svg" width="102" height="96" alt="Cat: Refactor, done"> | <img src="docs/mascots/cat/engineer-planned.svg" width="102" height="96" alt="Cat: Refactor, planned"> |
+| **Quick**<br>racing helmet and flag | <img src="docs/mascots/cat/sprinter-work.svg" width="102" height="96" alt="Cat: Quick, working"> | <img src="docs/mascots/cat/sprinter-wait.svg" width="102" height="96" alt="Cat: Quick, waiting"> | <img src="docs/mascots/cat/sprinter-done.svg" width="102" height="96" alt="Cat: Quick, done"> | <img src="docs/mascots/cat/sprinter-planned.svg" width="102" height="96" alt="Cat: Quick, planned"> |
+| **Debug**<br>deerstalker and magnifier | <img src="docs/mascots/cat/detective-work.svg" width="102" height="96" alt="Cat: Debug, working"> | <img src="docs/mascots/cat/detective-wait.svg" width="102" height="96" alt="Cat: Debug, waiting"> | <img src="docs/mascots/cat/detective-done.svg" width="102" height="96" alt="Cat: Debug, done"> | <img src="docs/mascots/cat/detective-planned.svg" width="102" height="96" alt="Cat: Debug, planned"> |
+| **Test**<br>safety goggles and flask | <img src="docs/mascots/cat/tester-work.svg" width="102" height="96" alt="Cat: Test, working"> | <img src="docs/mascots/cat/tester-wait.svg" width="102" height="96" alt="Cat: Test, waiting"> | <img src="docs/mascots/cat/tester-done.svg" width="102" height="96" alt="Cat: Test, done"> | <img src="docs/mascots/cat/tester-planned.svg" width="102" height="96" alt="Cat: Test, planned"> |
+| **Review**<br>judge's wig and gavel | <img src="docs/mascots/cat/reviewer-work.svg" width="102" height="96" alt="Cat: Review, working"> | <img src="docs/mascots/cat/reviewer-wait.svg" width="102" height="96" alt="Cat: Review, waiting"> | <img src="docs/mascots/cat/reviewer-done.svg" width="102" height="96" alt="Cat: Review, done"> | <img src="docs/mascots/cat/reviewer-planned.svg" width="102" height="96" alt="Cat: Review, planned"> |
+| **Design**<br>beret and paintbrush | <img src="docs/mascots/cat/designer-work.svg" width="102" height="96" alt="Cat: Design, working"> | <img src="docs/mascots/cat/designer-wait.svg" width="102" height="96" alt="Cat: Design, waiting"> | <img src="docs/mascots/cat/designer-done.svg" width="102" height="96" alt="Cat: Design, done"> | <img src="docs/mascots/cat/designer-planned.svg" width="102" height="96" alt="Cat: Design, planned"> |
+| **Write**<br>round glasses and quill | <img src="docs/mascots/cat/writer-work.svg" width="102" height="96" alt="Cat: Write, working"> | <img src="docs/mascots/cat/writer-wait.svg" width="102" height="96" alt="Cat: Write, waiting"> | <img src="docs/mascots/cat/writer-done.svg" width="102" height="96" alt="Cat: Write, done"> | <img src="docs/mascots/cat/writer-planned.svg" width="102" height="96" alt="Cat: Write, planned"> |
+| **Plan**<br>blueprint and pencil | <img src="docs/mascots/cat/planner-work.svg" width="102" height="96" alt="Cat: Plan, working"> | <img src="docs/mascots/cat/planner-wait.svg" width="102" height="96" alt="Cat: Plan, waiting"> | <img src="docs/mascots/cat/planner-done.svg" width="102" height="96" alt="Cat: Plan, done"> | <img src="docs/mascots/cat/planner-planned.svg" width="102" height="96" alt="Cat: Plan, planned"> |
+| **Hard**<br>astronaut dome | <img src="docs/mascots/cat/ace-work.svg" width="102" height="96" alt="Cat: Hard, working"> | <img src="docs/mascots/cat/ace-wait.svg" width="102" height="96" alt="Cat: Hard, waiting"> | <img src="docs/mascots/cat/ace-done.svg" width="102" height="96" alt="Cat: Hard, done"> | <img src="docs/mascots/cat/ace-planned.svg" width="102" height="96" alt="Cat: Hard, planned"> |
+| **Helper**<br>bandana | <img src="docs/mascots/cat/helper-work.svg" width="102" height="96" alt="Cat: Helper, working"> | <img src="docs/mascots/cat/helper-wait.svg" width="102" height="96" alt="Cat: Helper, waiting"> | <img src="docs/mascots/cat/helper-done.svg" width="102" height="96" alt="Cat: Helper, done"> | <img src="docs/mascots/cat/helper-planned.svg" width="102" height="96" alt="Cat: Helper, planned"> |
+
+**Helper's six colours.** A Helper takes one of them from its description.
+
+| `#AAC46E` | `#6EC47C` | `#C46EB3` | `#6EC4BE` | `#776EC4` | `#C47F6E` |
+|---|---|---|---|---|---|
+| <img src="docs/mascots/cat/helper-work.svg" width="102" height="96" alt="Cat: Helper in #AAC46E, working"> | <img src="docs/mascots/cat/helper-work-2.svg" width="102" height="96" alt="Cat: Helper in #6EC47C, working"> | <img src="docs/mascots/cat/helper-work-3.svg" width="102" height="96" alt="Cat: Helper in #C46EB3, working"> | <img src="docs/mascots/cat/helper-work-4.svg" width="102" height="96" alt="Cat: Helper in #6EC4BE, working"> | <img src="docs/mascots/cat/helper-work-5.svg" width="102" height="96" alt="Cat: Helper in #776EC4, working"> | <img src="docs/mascots/cat/helper-work-6.svg" width="102" height="96" alt="Cat: Helper in #C47F6E, working"> |
+
+<details>
+<summary>Cat: drawn by the sprite code, shown nowhere in the mod today</summary>
+
+Claude is never drawn done or planned, and an agent never rests or rides, so these never appear.
+
+| Claude: done | Claude: planned |
+|---|---|
+| <img src="docs/mascots/cat/main-done.svg" width="102" height="96" alt="Cat: Claude, done"> | <img src="docs/mascots/cat/main-planned.svg" width="102" height="96" alt="Cat: Claude, planned"> |
+
+| Kind | Resting | Riding its broom |
+|---|---|---|
+| **Search**<br>pirate hat and cutlass | <img src="docs/mascots/cat/scout-rest.svg" width="102" height="96" alt="Cat: Search, resting"> | <img src="docs/mascots/cat/scout-ride.svg" width="102" height="96" alt="Cat: Search, riding its broom"> |
+| **Analyze**<br>visor and bar chart | <img src="docs/mascots/cat/analyst-rest.svg" width="102" height="96" alt="Cat: Analyze, resting"> | <img src="docs/mascots/cat/analyst-ride.svg" width="102" height="96" alt="Cat: Analyze, riding its broom"> |
+| **Build**<br>chef's toque | <img src="docs/mascots/cat/chef-rest.svg" width="102" height="96" alt="Cat: Build, resting"> | <img src="docs/mascots/cat/chef-ride.svg" width="102" height="96" alt="Cat: Build, riding its broom"> |
+| **Refactor**<br>hard hat and wrench | <img src="docs/mascots/cat/engineer-rest.svg" width="102" height="96" alt="Cat: Refactor, resting"> | <img src="docs/mascots/cat/engineer-ride.svg" width="102" height="96" alt="Cat: Refactor, riding its broom"> |
+| **Quick**<br>racing helmet and flag | <img src="docs/mascots/cat/sprinter-rest.svg" width="102" height="96" alt="Cat: Quick, resting"> | <img src="docs/mascots/cat/sprinter-ride.svg" width="102" height="96" alt="Cat: Quick, riding its broom"> |
+| **Debug**<br>deerstalker and magnifier | <img src="docs/mascots/cat/detective-rest.svg" width="102" height="96" alt="Cat: Debug, resting"> | <img src="docs/mascots/cat/detective-ride.svg" width="102" height="96" alt="Cat: Debug, riding its broom"> |
+| **Test**<br>safety goggles and flask | <img src="docs/mascots/cat/tester-rest.svg" width="102" height="96" alt="Cat: Test, resting"> | <img src="docs/mascots/cat/tester-ride.svg" width="102" height="96" alt="Cat: Test, riding its broom"> |
+| **Review**<br>judge's wig and gavel | <img src="docs/mascots/cat/reviewer-rest.svg" width="102" height="96" alt="Cat: Review, resting"> | <img src="docs/mascots/cat/reviewer-ride.svg" width="102" height="96" alt="Cat: Review, riding its broom"> |
+| **Design**<br>beret and paintbrush | <img src="docs/mascots/cat/designer-rest.svg" width="102" height="96" alt="Cat: Design, resting"> | <img src="docs/mascots/cat/designer-ride.svg" width="102" height="96" alt="Cat: Design, riding its broom"> |
+| **Write**<br>round glasses and quill | <img src="docs/mascots/cat/writer-rest.svg" width="102" height="96" alt="Cat: Write, resting"> | <img src="docs/mascots/cat/writer-ride.svg" width="102" height="96" alt="Cat: Write, riding its broom"> |
+| **Plan**<br>blueprint and pencil | <img src="docs/mascots/cat/planner-rest.svg" width="102" height="96" alt="Cat: Plan, resting"> | <img src="docs/mascots/cat/planner-ride.svg" width="102" height="96" alt="Cat: Plan, riding its broom"> |
+| **Hard**<br>astronaut dome | <img src="docs/mascots/cat/ace-rest.svg" width="102" height="96" alt="Cat: Hard, resting"> | <img src="docs/mascots/cat/ace-ride.svg" width="102" height="96" alt="Cat: Hard, riding its broom"> |
+| **Helper**<br>bandana | <img src="docs/mascots/cat/helper-rest.svg" width="102" height="96" alt="Cat: Helper, resting"> | <img src="docs/mascots/cat/helper-ride.svg" width="102" height="96" alt="Cat: Helper, riding its broom"> |
+
+</details>
+
+### Clawd (`theme clawd`, the crab)
+
+**Claude, the main agent.** Working, waiting and resting are the main row of the panel. The crab has no broom: in the bar's progress row it works while a plan or a run is running and takes its done pose once it is done.
+
+| Working | Waiting | Resting | Done |
+|---|---|---|---|
+| <img src="docs/mascots/clawd/main-work.svg" width="102" height="96" alt="Clawd: Claude, working"> | <img src="docs/mascots/clawd/main-wait.svg" width="102" height="96" alt="Clawd: Claude, waiting"> | <img src="docs/mascots/clawd/main-rest.svg" width="102" height="96" alt="Clawd: Claude, resting"> | <img src="docs/mascots/clawd/main-done.svg" width="102" height="96" alt="Clawd: Claude, done"> |
+
+**Agents, by kind of work.** Working, waiting and done are an agent's row; planned is a task no agent has started yet.
+
+| Kind | Working | Waiting | Done | Planned |
+|---|---|---|---|---|
+| **Search**<br>pirate hat and cutlass | <img src="docs/mascots/clawd/scout-work.svg" width="102" height="96" alt="Clawd: Search, working"> | <img src="docs/mascots/clawd/scout-wait.svg" width="102" height="96" alt="Clawd: Search, waiting"> | <img src="docs/mascots/clawd/scout-done.svg" width="102" height="96" alt="Clawd: Search, done"> | <img src="docs/mascots/clawd/scout-planned.svg" width="102" height="96" alt="Clawd: Search, planned"> |
+| **Analyze**<br>visor and bar chart | <img src="docs/mascots/clawd/analyst-work.svg" width="102" height="96" alt="Clawd: Analyze, working"> | <img src="docs/mascots/clawd/analyst-wait.svg" width="102" height="96" alt="Clawd: Analyze, waiting"> | <img src="docs/mascots/clawd/analyst-done.svg" width="102" height="96" alt="Clawd: Analyze, done"> | <img src="docs/mascots/clawd/analyst-planned.svg" width="102" height="96" alt="Clawd: Analyze, planned"> |
+| **Build**<br>chef's toque | <img src="docs/mascots/clawd/chef-work.svg" width="102" height="96" alt="Clawd: Build, working"> | <img src="docs/mascots/clawd/chef-wait.svg" width="102" height="96" alt="Clawd: Build, waiting"> | <img src="docs/mascots/clawd/chef-done.svg" width="102" height="96" alt="Clawd: Build, done"> | <img src="docs/mascots/clawd/chef-planned.svg" width="102" height="96" alt="Clawd: Build, planned"> |
+| **Refactor**<br>hard hat and wrench | <img src="docs/mascots/clawd/engineer-work.svg" width="102" height="96" alt="Clawd: Refactor, working"> | <img src="docs/mascots/clawd/engineer-wait.svg" width="102" height="96" alt="Clawd: Refactor, waiting"> | <img src="docs/mascots/clawd/engineer-done.svg" width="102" height="96" alt="Clawd: Refactor, done"> | <img src="docs/mascots/clawd/engineer-planned.svg" width="102" height="96" alt="Clawd: Refactor, planned"> |
+| **Quick**<br>racing helmet and flag | <img src="docs/mascots/clawd/sprinter-work.svg" width="102" height="96" alt="Clawd: Quick, working"> | <img src="docs/mascots/clawd/sprinter-wait.svg" width="102" height="96" alt="Clawd: Quick, waiting"> | <img src="docs/mascots/clawd/sprinter-done.svg" width="102" height="96" alt="Clawd: Quick, done"> | <img src="docs/mascots/clawd/sprinter-planned.svg" width="102" height="96" alt="Clawd: Quick, planned"> |
+| **Debug**<br>deerstalker and magnifier | <img src="docs/mascots/clawd/detective-work.svg" width="102" height="96" alt="Clawd: Debug, working"> | <img src="docs/mascots/clawd/detective-wait.svg" width="102" height="96" alt="Clawd: Debug, waiting"> | <img src="docs/mascots/clawd/detective-done.svg" width="102" height="96" alt="Clawd: Debug, done"> | <img src="docs/mascots/clawd/detective-planned.svg" width="102" height="96" alt="Clawd: Debug, planned"> |
+| **Test**<br>safety goggles and flask | <img src="docs/mascots/clawd/tester-work.svg" width="102" height="96" alt="Clawd: Test, working"> | <img src="docs/mascots/clawd/tester-wait.svg" width="102" height="96" alt="Clawd: Test, waiting"> | <img src="docs/mascots/clawd/tester-done.svg" width="102" height="96" alt="Clawd: Test, done"> | <img src="docs/mascots/clawd/tester-planned.svg" width="102" height="96" alt="Clawd: Test, planned"> |
+| **Review**<br>judge's wig and gavel | <img src="docs/mascots/clawd/reviewer-work.svg" width="102" height="96" alt="Clawd: Review, working"> | <img src="docs/mascots/clawd/reviewer-wait.svg" width="102" height="96" alt="Clawd: Review, waiting"> | <img src="docs/mascots/clawd/reviewer-done.svg" width="102" height="96" alt="Clawd: Review, done"> | <img src="docs/mascots/clawd/reviewer-planned.svg" width="102" height="96" alt="Clawd: Review, planned"> |
+| **Design**<br>beret and paintbrush | <img src="docs/mascots/clawd/designer-work.svg" width="102" height="96" alt="Clawd: Design, working"> | <img src="docs/mascots/clawd/designer-wait.svg" width="102" height="96" alt="Clawd: Design, waiting"> | <img src="docs/mascots/clawd/designer-done.svg" width="102" height="96" alt="Clawd: Design, done"> | <img src="docs/mascots/clawd/designer-planned.svg" width="102" height="96" alt="Clawd: Design, planned"> |
+| **Write**<br>round glasses and quill | <img src="docs/mascots/clawd/writer-work.svg" width="102" height="96" alt="Clawd: Write, working"> | <img src="docs/mascots/clawd/writer-wait.svg" width="102" height="96" alt="Clawd: Write, waiting"> | <img src="docs/mascots/clawd/writer-done.svg" width="102" height="96" alt="Clawd: Write, done"> | <img src="docs/mascots/clawd/writer-planned.svg" width="102" height="96" alt="Clawd: Write, planned"> |
+| **Plan**<br>blueprint and pencil | <img src="docs/mascots/clawd/planner-work.svg" width="102" height="96" alt="Clawd: Plan, working"> | <img src="docs/mascots/clawd/planner-wait.svg" width="102" height="96" alt="Clawd: Plan, waiting"> | <img src="docs/mascots/clawd/planner-done.svg" width="102" height="96" alt="Clawd: Plan, done"> | <img src="docs/mascots/clawd/planner-planned.svg" width="102" height="96" alt="Clawd: Plan, planned"> |
+| **Hard**<br>astronaut dome | <img src="docs/mascots/clawd/ace-work.svg" width="102" height="96" alt="Clawd: Hard, working"> | <img src="docs/mascots/clawd/ace-wait.svg" width="102" height="96" alt="Clawd: Hard, waiting"> | <img src="docs/mascots/clawd/ace-done.svg" width="102" height="96" alt="Clawd: Hard, done"> | <img src="docs/mascots/clawd/ace-planned.svg" width="102" height="96" alt="Clawd: Hard, planned"> |
+| **Helper**<br>bandana | <img src="docs/mascots/clawd/helper-work.svg" width="102" height="96" alt="Clawd: Helper, working"> | <img src="docs/mascots/clawd/helper-wait.svg" width="102" height="96" alt="Clawd: Helper, waiting"> | <img src="docs/mascots/clawd/helper-done.svg" width="102" height="96" alt="Clawd: Helper, done"> | <img src="docs/mascots/clawd/helper-planned.svg" width="102" height="96" alt="Clawd: Helper, planned"> |
+
+**Helper's six colours.** A Helper takes one of them from its description.
+
+| `#AAC46E` | `#6EC47C` | `#C46EB3` | `#6EC4BE` | `#776EC4` | `#C47F6E` |
+|---|---|---|---|---|---|
+| <img src="docs/mascots/clawd/helper-work.svg" width="102" height="96" alt="Clawd: Helper in #AAC46E, working"> | <img src="docs/mascots/clawd/helper-work-2.svg" width="102" height="96" alt="Clawd: Helper in #6EC47C, working"> | <img src="docs/mascots/clawd/helper-work-3.svg" width="102" height="96" alt="Clawd: Helper in #C46EB3, working"> | <img src="docs/mascots/clawd/helper-work-4.svg" width="102" height="96" alt="Clawd: Helper in #6EC4BE, working"> | <img src="docs/mascots/clawd/helper-work-5.svg" width="102" height="96" alt="Clawd: Helper in #776EC4, working"> | <img src="docs/mascots/clawd/helper-work-6.svg" width="102" height="96" alt="Clawd: Helper in #C47F6E, working"> |
+
+<details>
+<summary>Clawd: drawn by the sprite code, shown nowhere in the mod today</summary>
+
+Claude is never drawn planned, and an agent never rests, so these never appear.
+
+| Claude: planned |
+|---|
+| <img src="docs/mascots/clawd/main-planned.svg" width="102" height="96" alt="Clawd: Claude, planned"> |
+
+| Kind | Resting |
+|---|---|
+| **Search**<br>pirate hat and cutlass | <img src="docs/mascots/clawd/scout-rest.svg" width="102" height="96" alt="Clawd: Search, resting"> |
+| **Analyze**<br>visor and bar chart | <img src="docs/mascots/clawd/analyst-rest.svg" width="102" height="96" alt="Clawd: Analyze, resting"> |
+| **Build**<br>chef's toque | <img src="docs/mascots/clawd/chef-rest.svg" width="102" height="96" alt="Clawd: Build, resting"> |
+| **Refactor**<br>hard hat and wrench | <img src="docs/mascots/clawd/engineer-rest.svg" width="102" height="96" alt="Clawd: Refactor, resting"> |
+| **Quick**<br>racing helmet and flag | <img src="docs/mascots/clawd/sprinter-rest.svg" width="102" height="96" alt="Clawd: Quick, resting"> |
+| **Debug**<br>deerstalker and magnifier | <img src="docs/mascots/clawd/detective-rest.svg" width="102" height="96" alt="Clawd: Debug, resting"> |
+| **Test**<br>safety goggles and flask | <img src="docs/mascots/clawd/tester-rest.svg" width="102" height="96" alt="Clawd: Test, resting"> |
+| **Review**<br>judge's wig and gavel | <img src="docs/mascots/clawd/reviewer-rest.svg" width="102" height="96" alt="Clawd: Review, resting"> |
+| **Design**<br>beret and paintbrush | <img src="docs/mascots/clawd/designer-rest.svg" width="102" height="96" alt="Clawd: Design, resting"> |
+| **Write**<br>round glasses and quill | <img src="docs/mascots/clawd/writer-rest.svg" width="102" height="96" alt="Clawd: Write, resting"> |
+| **Plan**<br>blueprint and pencil | <img src="docs/mascots/clawd/planner-rest.svg" width="102" height="96" alt="Clawd: Plan, resting"> |
+| **Hard**<br>astronaut dome | <img src="docs/mascots/clawd/ace-rest.svg" width="102" height="96" alt="Clawd: Hard, resting"> |
+| **Helper**<br>bandana | <img src="docs/mascots/clawd/helper-rest.svg" width="102" height="96" alt="Clawd: Helper, resting"> |
+
+</details>
+
+<!-- mascots:end -->
+
 ## Settings
 
 Settings live in two places, and nothing is in both:
